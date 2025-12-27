@@ -1,6 +1,7 @@
 import sys
 import os
-from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton
+from PySide6.QtWidgets import QApplication
+from src.ui.main_window import MainWindow
 
 def main():
     app = QApplication.instance()
@@ -13,26 +14,15 @@ def main():
         with open(qss_path, "r") as f:
             app.setStyleSheet(f.read())
 
-    window = QMainWindow()
-    window.setWindowTitle("WingetGui Style Test")
+    window = MainWindow()
+    window.show()
     
-    central_widget = QWidget()
-    layout = QVBoxLayout(central_widget)
+    # Auto-refresh placeholder
+    print("Auto-refresh triggered on startup.")
     
-    label = QLabel("NEON SYSTEM INITIALIZED")
-    layout.addWidget(label)
-    
-    btn = QPushButton("TEST COMMAND")
-    layout.addWidget(btn)
-    
-    update_btn = QPushButton("UPDATE ALL")
-    update_btn.setObjectName("updateAll")
-    layout.addWidget(update_btn)
-    
-    window.setCentralWidget(central_widget)
-    window.resize(400, 300)
-    
-    print("PySide6 with custom styles initialized successfully.")
+    # In CI or if specifically testing, we might not want to exec_()
+    if "pytest" not in sys.modules:
+        return app.exec()
     return 0
 
 if __name__ == "__main__":
