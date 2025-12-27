@@ -19,7 +19,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Basic Dashboard UI' (Protocol in workflow.md) 6c24946
 
 ## Phase 4: Interaction & Execution
-- [ ] Task: Write tests for selection logic (checkboxes)
+- [x] Task: Write tests for selection logic (checkboxes) e4b5c1c
 - [ ] Task: Implement checkbox selection and bulk action logic
 - [ ] Task: Connect integrated console to winget output stream
 - [ ] Task: Implement "Update All" and "Update Selected" triggers
