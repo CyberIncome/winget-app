@@ -88,9 +88,21 @@ class MainWindow(QMainWindow):
         self.header_label.setAlignment(Qt.AlignCenter)
         self.main_layout.addWidget(self.header_label)
 
+        # Middle Section: Table and Details
+        self.middle_layout = QHBoxLayout()
+        
         self.table = QTableView()
-        self.main_layout.addWidget(self.table)
+        self.middle_layout.addWidget(self.table, 3) # Table takes 3/4
 
+        self.details_panel = QPlainTextEdit()
+        self.details_panel.setReadOnly(True)
+        self.details_panel.setPlaceholderText("APP DETAILS...")
+        self.details_panel.setObjectName("detailsPanel")
+        self.middle_layout.addWidget(self.details_panel, 1) # Details takes 1/4
+        
+        self.main_layout.addLayout(self.middle_layout)
+
+        # Bottom Section: Console & Buttons
         self.bottom_layout = QHBoxLayout()
         self.console = QPlainTextEdit()
         self.console.setObjectName("console")
@@ -113,6 +125,19 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self.refresh_updates)
         self.update_selected_btn.clicked.connect(self.update_selected)
         self.update_all_btn.clicked.connect(self.update_all)
+        self.table.clicked.connect(self.show_details)
+
+    def show_details(self, index):
+        model = self.table.model()
+        if not model: return
+        
+        item_data = model._data[index.row()]
+        details = "NEON SYSTEM DATA DUMP:\n"
+        details += "="*20 + "\n"
+        for key, val in item_data.items():
+            details += f"{key.upper()}: {val}\n"
+        
+        self.details_panel.setPlainText(details)
 
     def refresh_updates(self):
         self.current_operation = "refresh"

@@ -26,11 +26,16 @@ QHeaderView::section {
     border: 1px solid #004444;
 }
 
-QPlainTextEdit#console {
+QPlainTextEdit#console, QPlainTextEdit#detailsPanel {
     background-color: #000000;
     color: #CCCCCC;
     border: 1px solid #00F2FF;
     font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+QPlainTextEdit#detailsPanel {
+    color: #00F2FF;
+    border-color: #004444;
 }
 
 QPushButton {
