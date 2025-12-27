@@ -73,7 +73,11 @@ class MainWindow(QMainWindow):
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
 
+        self.current_operation = None # "refresh", "update"
+        self.full_output = ""
+
         self.setup_ui()
+        self.connect_signals()
         
     def setup_ui(self):
         self.central_widget = QWidget()
@@ -105,11 +109,52 @@ class MainWindow(QMainWindow):
         self.bottom_layout.addLayout(self.button_layout, 1)
         self.main_layout.addLayout(self.bottom_layout)
 
+    def connect_signals(self):
+        self.refresh_btn.clicked.connect(self.refresh_updates)
+        self.update_selected_btn.clicked.connect(self.update_selected)
+        self.update_all_btn.clicked.connect(self.update_all)
+
+    def refresh_updates(self):
+        self.current_operation = "refresh"
+        self.full_output = ""
+        self.log(">>> CHECKING FOR UPDATES...")
+        cmd = self.executor.get_check_updates_cmd()
+        self.process.start(cmd[0], cmd[1:])
+
+    def update_selected(self):
+        model = self.table.model()
+        if not model: return
+        
+        ids = model.get_selected_ids()
+        if not ids:
+            self.log(">>> NO APPS SELECTED.")
+            return
+
+        self.current_operation = "update"
+        self.log(f">>> UPDATING {len(ids)} SELECTED APPS...")
+        self.process_queue = ids
+        self.run_next_update()
+
+    def update_all(self):
+        self.current_operation = "update"
+        self.log(">>> UPDATING ALL APPS...")
+        cmd = self.executor.get_update_all_cmd()
+        self.process.start(cmd[0], cmd[1:])
+
+    def run_next_update(self):
+        if hasattr(self, "process_queue") and self.process_queue:
+            app_id = self.process_queue.pop(0)
+            cmd = self.executor.get_update_cmd(app_id)
+            self.process.start(cmd[0], cmd[1:])
+        else:
+            self.log(">>> ALL SELECTED UPDATES COMPLETE.")
+
     def log(self, message):
         self.console.appendPlainText(message)
 
     def handle_stdout(self):
         data = self.process.readAllStandardOutput().data().decode()
+        self.full_output += data
         self.log(data.strip())
 
     def handle_stderr(self):
@@ -118,3 +163,11 @@ class MainWindow(QMainWindow):
 
     def process_finished(self, exit_code, exit_status):
         self.log(f"\nPROCESS FINISHED WITH EXIT CODE {exit_code}")
+        
+        if self.current_operation == "refresh":
+            data = parse_winget_upgrade(self.full_output)
+            self.table.setModel(UpdateModel(data))
+            self.log(f">>> FOUND {len(data)} UPDATES.")
+        
+        elif self.current_operation == "update" and hasattr(self, "process_queue") and self.process_queue:
+            self.run_next_update()

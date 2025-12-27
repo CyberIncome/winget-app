@@ -17,8 +17,8 @@ def main():
     window = MainWindow()
     window.show()
     
-    # Auto-refresh placeholder
-    print("Auto-refresh triggered on startup.")
+    # Auto-refresh on startup
+    window.refresh_updates()
     
     # In CI or if specifically testing, we might not want to exec_()
     if "pytest" not in sys.modules:
