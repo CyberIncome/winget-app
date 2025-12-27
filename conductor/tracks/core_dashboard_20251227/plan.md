@@ -5,12 +5,12 @@
 - [x] Task: Create initial QSS for Cyber/Tech Dark Mode 6cb25e1
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Scaffolding' (Protocol in workflow.md) 85ec81c
 
-## Phase 2: Winget Parser (Core Logic)
+## Phase 2: Winget Parser (Core Logic) [checkpoint: 3e8cc0c]
 - [x] Task: Write tests for winget output parsing 42129a3
 - [x] Task: Implement winget output parser in `src/logic/parser.py` b06faf4
 - [x] Task: Write tests for update command execution 5af740a
 - [x] Task: Implement winget command executor in `src/logic/executor.py` f074a78
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Winget Parser (Core Logic)' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Winget Parser (Core Logic)' (Protocol in workflow.md) 3e8cc0c
 
 ## Phase 3: Basic Dashboard UI
 - [ ] Task: Write tests for main window layout
