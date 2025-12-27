@@ -1,0 +1,78 @@
+/* WingetGui Cyber/Tech Dark Mode Styles */
+
+QMainWindow {
+    background-color: #000000;
+}
+
+QWidget {
+    background-color: #000000;
+    color: #00F2FF;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 10pt;
+}
+
+QTableView {
+    background-color: #000000;
+    gridline-color: #004444;
+    border: 1px solid #00F2FF;
+    selection-background-color: #004444;
+    selection-color: #00F2FF;
+}
+
+QHeaderView::section {
+    background-color: #111111;
+    color: #00F2FF;
+    padding: 5px;
+    border: 1px solid #004444;
+}
+
+QPlainTextEdit#console {
+    background-color: #000000;
+    color: #CCCCCC;
+    border: 1px solid #00F2FF;
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+QPushButton {
+    background-color: #000000;
+    color: #00F2FF;
+    border: 2px solid #00F2FF;
+    padding: 10px 20px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+QPushButton:hover {
+    background-color: #00F2FF;
+    color: #000000;
+}
+
+QPushButton:pressed {
+    background-color: #008888;
+}
+
+QPushButton#updateAll {
+    border-color: #39FF14;
+    color: #39FF14;
+}
+
+QPushButton#updateAll:hover {
+    background-color: #39FF14;
+    color: #000000;
+}
+
+QCheckBox {
+    spacing: 5px;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid #00F2FF;
+    background-color: #000000;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #00F2FF;
+    image: url(check.png); /* Placeholder for later */
+}
