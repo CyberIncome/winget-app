@@ -11,11 +11,19 @@ QWidget {
     font-size: 10pt;
 }
 
+QLabel {
+    color: #00F2FF;
+    font-size: 14pt;
+    font-weight: bold;
+    margin: 10px;
+    border-bottom: 2px solid #00F2FF;
+}
+
 QTableView {
     background-color: #000000;
     gridline-color: #004444;
-    border: 1px solid #00F2FF;
-    selection-background-color: #004444;
+    border: 2px solid #00F2FF;
+    selection-background-color: #002222;
     selection-color: #00F2FF;
 }
 
@@ -79,5 +87,4 @@ QCheckBox::indicator {
 
 QCheckBox::indicator:checked {
     background-color: #00F2FF;
-    image: url(check.png); /* Placeholder for later */
 }
