@@ -6,7 +6,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Environment Setup & Scaffolding' (Protocol in workflow.md) 85ec81c
 
 ## Phase 2: Winget Parser (Core Logic)
-- [ ] Task: Write tests for winget output parsing
+- [x] Task: Write tests for winget output parsing 42129a3
 - [ ] Task: Implement winget output parser in `src/logic/parser.py`
 - [ ] Task: Write tests for update command execution
 - [ ] Task: Implement winget command executor in `src/logic/executor.py`
