@@ -9,7 +9,7 @@
 - [x] Task: Write tests for winget output parsing 42129a3
 - [x] Task: Implement winget output parser in `src/logic/parser.py` b06faf4
 - [x] Task: Write tests for update command execution 5af740a
-- [ ] Task: Implement winget command executor in `src/logic/executor.py`
+- [x] Task: Implement winget command executor in `src/logic/executor.py` f074a78
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Winget Parser (Core Logic)' (Protocol in workflow.md)
 
 ## Phase 3: Basic Dashboard UI
