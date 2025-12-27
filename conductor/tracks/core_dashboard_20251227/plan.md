@@ -14,7 +14,7 @@
 
 ## Phase 3: Basic Dashboard UI
 - [x] Task: Write tests for main window layout dc602cd
-- [ ] Task: Implement main dashboard structure in `src/ui/main_window.py`
+- [x] Task: Implement main dashboard structure in `src/ui/main_window.py` b71933c
 - [ ] Task: Implement auto-refresh logic on startup
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Basic Dashboard UI' (Protocol in workflow.md)
 
