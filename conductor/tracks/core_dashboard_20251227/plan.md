@@ -21,7 +21,7 @@
 ## Phase 4: Interaction & Execution
 - [x] Task: Write tests for selection logic (checkboxes) e4b5c1c
 - [x] Task: Implement checkbox selection and bulk action logic ef9c097
-- [ ] Task: Connect integrated console to winget output stream
+- [x] Task: Connect integrated console to winget output stream 5b354f5
 - [ ] Task: Implement "Update All" and "Update Selected" triggers
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Interaction & Execution' (Protocol in workflow.md)
 
