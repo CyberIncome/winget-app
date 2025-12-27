@@ -3,7 +3,9 @@ import os
 from PySide6.QtWidgets import QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton
 
 def main():
-    app = QApplication(sys.argv)
+    app = QApplication.instance()
+    if not app:
+        app = QApplication(sys.argv)
     
     # Load Styles
     qss_path = os.path.join(os.path.dirname(__file__), "ui", "styles.qss")
