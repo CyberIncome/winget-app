@@ -13,7 +13,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Winget Parser (Core Logic)' (Protocol in workflow.md) 3e8cc0c
 
 ## Phase 3: Basic Dashboard UI
-- [ ] Task: Write tests for main window layout
+- [x] Task: Write tests for main window layout dc602cd
 - [ ] Task: Implement main dashboard structure in `src/ui/main_window.py`
 - [ ] Task: Implement auto-refresh logic on startup
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Basic Dashboard UI' (Protocol in workflow.md)
