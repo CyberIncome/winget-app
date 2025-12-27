@@ -12,11 +12,11 @@
 - [x] Task: Implement winget command executor in `src/logic/executor.py` f074a78
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Winget Parser (Core Logic)' (Protocol in workflow.md) 3e8cc0c
 
-## Phase 3: Basic Dashboard UI
+## Phase 3: Basic Dashboard UI [checkpoint: 6c24946]
 - [x] Task: Write tests for main window layout dc602cd
 - [x] Task: Implement main dashboard structure in `src/ui/main_window.py` b71933c
 - [x] Task: Implement auto-refresh logic on startup c2ff866
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Basic Dashboard UI' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Basic Dashboard UI' (Protocol in workflow.md) 6c24946
 
 ## Phase 4: Interaction & Execution
 - [ ] Task: Write tests for selection logic (checkboxes)
