@@ -1,0 +1,8 @@
+{
+  "track_id": "core_dashboard_20251227",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2025-12-27T06:00:00Z",
+  "updated_at": "2025-12-27T06:00:00Z",
+  "description": "Build the Core Update Dashboard: Initialize the Python/PySide6 project, implement the winget output parser, and create the main dashboard with the update table, checkboxes, and basic Update All functionality."
+}
