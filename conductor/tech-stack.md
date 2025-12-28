@@ -6,9 +6,9 @@
 - **Architecture:** Procedural/Object-Oriented with a dedicated `WingetProcess` handler for non-blocking CLI calls.
 
 ## Styling & Theme
-- **Theme Engine:** Qt Style Sheets (QSS) for custom "Cyber/Tech" styling.
-- **Color Palette:** Pure Black (#000000), Neon Blue (#00F2FF), Electric Green (#39FF14).
-- **Fonts:** Cascadia Code / Consolas (Monospaced).
+- **Theme Engine:** Qt Style Sheets (QSS) for custom "Modern Glassmorphism" styling.
+- **Color Palette:** Deep Slate (#1A1B26), Soft Electric Blue (#7AA2F7), Emerald Green (#9ECE6A).
+- **Fonts:** Segoe UI / Inter (UI), Cascadia Code / Consolas (Monospaced Logs).
 
 ## CLI Integration
 - **Execution:** Python `subprocess` module for running `winget` commands.

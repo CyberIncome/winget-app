@@ -1,9 +1,15 @@
 import sys
 import os
+import logging
 from PySide6.QtWidgets import QApplication
 from src.ui.main_window import MainWindow
 
 def main():
+    # Setup base logging
+    logging.basicConfig(level=logging.DEBUG)
+    logger = logging.getLogger(__name__)
+    logger.info("Starting WingetGui...")
+
     app = QApplication.instance()
     if not app:
         app = QApplication(sys.argv)
@@ -16,9 +22,6 @@ def main():
 
     window = MainWindow()
     window.show()
-    
-    # Auto-refresh on startup
-    window.refresh_updates()
     
     # In CI or if specifically testing, we might not want to exec_()
     if "pytest" not in sys.modules:

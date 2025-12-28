@@ -16,8 +16,7 @@ A streamlined, high-performance GUI wrapper for the Windows Package Manager (`wi
 - **Selection Control:** Individual checkboxes for granular updates and an "Update All" button for bulk processing.
 - **Details Panel:** A dedicated side or bottom panel showing all metadata available from winget (Publisher, Release Notes, etc.) for the selected item.
 - **Integrated Console:** A real-time terminal output area within the GUI to monitor the progress of `winget` commands.
-- **Dedicated Dark Mode:** A fixed dark theme for a professional aesthetic, independent of Windows system settings.
-
+- **Modern Glassmorphism UI:** A sophisticated dark mode interface (#1A1B26) featuring semi-transparent surfaces, rounded corners, and a professional, spacious layout.
 ## User Flow
 1. **Launch:** App opens and immediately begins fetching updates.
 2. **Review:** User views the populated list and optional details panel.

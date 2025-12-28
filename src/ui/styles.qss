@@ -29,7 +29,7 @@ QLabel {
 
 /* Table Specifics */
 QTableView {
-    gridline-color: transparent;
+    gridline-color: rgba(65, 72, 104, 150); /* Visible grid lines */
     selection-background-color: rgba(122, 162, 247, 50);
     selection-color: #7AA2F7;
     outline: none;
@@ -46,6 +46,7 @@ QHeaderView::section {
     color: #7AA2F7;
     padding: 8px;
     border: none;
+    border-right: 2px solid #414868; /* Distinct column dividers */
     border-bottom: 1px solid #414868;
     font-weight: bold;
 }
@@ -59,7 +60,8 @@ QPlainTextEdit#console {
 
 QPlainTextEdit#detailsPanel {
     color: #7AA2F7;
-    font-size: 9pt;
+    font-size: 10pt;
+    font-weight: 500;
 }
 
 /* Modern Buttons */
@@ -70,7 +72,7 @@ QPushButton {
     border-radius: 8px;
     padding: 12px 24px;
     font-weight: 600;
-    text-transform: none; /* Move away from all-caps */
+    text-transform: none;
 }
 
 QPushButton:hover {
@@ -102,9 +104,8 @@ QCheckBox::indicator {
 }
 
 QCheckBox::indicator:checked {
-    background-color: #7AA2F7;
-    border-color: #7AA2F7;
-    /* You could add a checkmark image here if available */
+    background-color: #9ECE6A;
+    border-color: #9ECE6A;
 }
 
 QScrollBar:vertical {
