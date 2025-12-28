@@ -1,90 +1,119 @@
-/* WingetGui Cyber/Tech Dark Mode Styles */
+/* WingetGui Modern Glassmorphism Styles */
 
 QMainWindow {
-    background-color: #000000;
+    background-color: #1A1B26;
 }
 
 QWidget {
-    background-color: #000000;
-    color: #00F2FF;
-    font-family: 'Cascadia Code', 'Consolas', monospace;
+    background-color: transparent;
+    color: #A9B1D6;
+    font-family: 'Segoe UI', 'Inter', sans-serif;
     font-size: 10pt;
 }
 
-QLabel {
-    color: #00F2FF;
-    font-size: 14pt;
-    font-weight: bold;
-    margin: 10px;
-    border-bottom: 2px solid #00F2FF;
+/* Glass Surface Containers */
+QTableView, QPlainTextEdit#console, QPlainTextEdit#detailsPanel {
+    background-color: rgba(36, 40, 59, 204); /* alpha 0.8 */
+    border: 1px solid #414868;
+    border-radius: 12px;
+    padding: 5px;
 }
 
+QLabel {
+    color: #7AA2F7;
+    font-size: 16pt;
+    font-weight: 600;
+    margin: 10px;
+    border: none;
+}
+
+/* Table Specifics */
 QTableView {
-    background-color: #000000;
-    gridline-color: #004444;
-    border: 2px solid #00F2FF;
-    selection-background-color: #002222;
-    selection-color: #00F2FF;
+    gridline-color: transparent;
+    selection-background-color: rgba(122, 162, 247, 50);
+    selection-color: #7AA2F7;
+    outline: none;
 }
 
 QHeaderView::section {
-    background-color: #111111;
-    color: #00F2FF;
-    padding: 5px;
-    border: 1px solid #004444;
+    background-color: rgba(26, 27, 38, 200);
+    color: #7AA2F7;
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid #414868;
+    font-weight: bold;
 }
 
-QPlainTextEdit#console, QPlainTextEdit#detailsPanel {
-    background-color: #000000;
-    color: #CCCCCC;
-    border: 1px solid #00F2FF;
+/* Console & Details */
+QPlainTextEdit#console {
     font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 9pt;
+    color: #787C99;
 }
 
 QPlainTextEdit#detailsPanel {
-    color: #00F2FF;
-    border-color: #004444;
+    color: #7AA2F7;
+    font-size: 9pt;
 }
 
+/* Modern Buttons */
 QPushButton {
-    background-color: #000000;
-    color: #00F2FF;
-    border: 2px solid #00F2FF;
-    padding: 10px 20px;
-    font-weight: bold;
-    text-transform: uppercase;
+    background-color: rgba(65, 72, 104, 150);
+    color: #FFFFFF;
+    border: 1px solid #414868;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-weight: 600;
+    text-transform: none; /* Move away from all-caps */
 }
 
 QPushButton:hover {
-    background-color: #00F2FF;
-    color: #000000;
+    background-color: rgba(122, 162, 247, 100);
+    border-color: #7AA2F7;
 }
 
 QPushButton:pressed {
-    background-color: #008888;
+    background-color: rgba(122, 162, 247, 150);
 }
 
 QPushButton#updateAll {
-    border-color: #39FF14;
-    color: #39FF14;
+    background-color: rgba(158, 206, 106, 40);
+    border-color: #9ECE6A;
+    color: #9ECE6A;
 }
 
 QPushButton#updateAll:hover {
-    background-color: #39FF14;
-    color: #000000;
+    background-color: rgba(158, 206, 106, 80);
 }
 
-QCheckBox {
-    spacing: 5px;
-}
-
+/* Checkboxes */
 QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border: 1px solid #00F2FF;
-    background-color: #000000;
+    width: 20px;
+    height: 20px;
+    border: 1px solid #414868;
+    border-radius: 4px;
+    background-color: rgba(36, 40, 59, 255);
 }
 
 QCheckBox::indicator:checked {
-    background-color: #00F2FF;
+    background-color: #7AA2F7;
+    border-color: #7AA2F7;
+    /* You could add a checkmark image here if available */
+}
+
+QScrollBar:vertical {
+    border: none;
+    background: transparent;
+    width: 10px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #414868;
+    min-height: 20px;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
 }
