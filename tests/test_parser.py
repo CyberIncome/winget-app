@@ -14,7 +14,7 @@ Microsoft Visual Studio Code   Microsoft.VisualStudioCode   1.85.1           1.8
     assert results[0]["Id"] == "Google.Chrome"
     assert results[0]["Version"] == "120.0.6099.110"
     assert results[0]["Available"] == "120.0.6099.130"
-    assert results[0]["Source"] == "winget"
+    assert "Source" not in results[0]
     
     assert results[1]["Id"] == "Microsoft.VisualStudioCode"
 
