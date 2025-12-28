@@ -16,7 +16,7 @@
 - [x] Task: Update `UpdateModel` or QSS to ensure checkboxes fit the modern theme e6b90a6
 - [~] Task: Conductor - User Manual Verification 'Phase 3: Table Readability' (Protocol in workflow.md)
 
-## Phase 4: Final Refinement
+## Phase 4: Final Refinement [checkpoint: 6c09f94]
 - [x] Task: Soften the Details Panel styling 01cb369
 - [x] Task: Remove "NEON SYSTEM" branding in favor of modern headers 01cb369
-- [~] Task: Conductor - User Manual Verification 'Phase 4: Final Refinement' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Final Refinement' (Protocol in workflow.md) 6c09f94
