@@ -147,17 +147,17 @@ class MainWindow(QMainWindow):
         if not model: return
         
         item_data = model._data[index.row()]
-        details = "NEON SYSTEM DATA DUMP:\n"
-        details += "="*20 + "\n"
+        details = "Application Details\n"
+        details += "────────────────────\n"
         for key, val in item_data.items():
-            details += f"{key.upper()}: {val}\n"
+            details += f"{key}: {val}\n"
         
         self.details_panel.setPlainText(details)
 
     def refresh_updates(self):
         self.current_operation = "refresh"
         self.full_output = ""
-        self.log(">>> CHECKING FOR UPDATES...")
+        self.log("Scanning for available updates...")
         cmd = self.executor.get_check_updates_cmd()
         self.process.start(cmd[0], cmd[1:])
 
@@ -167,17 +167,20 @@ class MainWindow(QMainWindow):
         
         ids = model.get_selected_ids()
         if not ids:
-            self.log(">>> NO APPS SELECTED.")
+            self.log("No applications selected for update.")
             return
 
         self.current_operation = "update"
-        self.log(f">>> UPDATING {len(ids)} SELECTED APPS...")
+        self.log(f"Updating {len(ids)} selected applications...")
+        # For now, we update them one by one or we could try bulk, 
+        # but winget usually prefers one command. We'll start with the first.
+        # Improvement: Queue them up.
         self.process_queue = ids
         self.run_next_update()
 
     def update_all(self):
         self.current_operation = "update"
-        self.log(">>> UPDATING ALL APPS...")
+        self.log("Updating all available applications...")
         cmd = self.executor.get_update_all_cmd()
         self.process.start(cmd[0], cmd[1:])
 
@@ -187,7 +190,7 @@ class MainWindow(QMainWindow):
             cmd = self.executor.get_update_cmd(app_id)
             self.process.start(cmd[0], cmd[1:])
         else:
-            self.log(">>> ALL SELECTED UPDATES COMPLETE.")
+            self.log("All selected updates have completed.")
 
     def log(self, message):
         self.console.appendPlainText(message)
@@ -202,12 +205,12 @@ class MainWindow(QMainWindow):
         self.log(f"ERROR: {data.strip()}")
 
     def process_finished(self, exit_code, exit_status):
-        self.log(f"\nPROCESS FINISHED WITH EXIT CODE {exit_code}")
+        self.log(f"Process completed (Exit code: {exit_code})")
         
         if self.current_operation == "refresh":
             data = parse_winget_upgrade(self.full_output)
             self.table.setModel(UpdateModel(data))
-            self.log(f">>> FOUND {len(data)} UPDATES.")
+            self.log(f"Found {len(data)} updates available.")
         
         elif self.current_operation == "update" and hasattr(self, "process_queue") and self.process_queue:
             self.run_next_update()
