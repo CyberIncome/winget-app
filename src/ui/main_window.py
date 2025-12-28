@@ -83,20 +83,23 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
+        self.main_layout.setContentsMargins(20, 20, 20, 20)
+        self.main_layout.setSpacing(15)
 
-        self.header_label = QLabel("NEON SYSTEM: WINGET UPDATE DASHBOARD")
+        self.header_label = QLabel("Winget Update Dashboard")
         self.header_label.setAlignment(Qt.AlignCenter)
         self.main_layout.addWidget(self.header_label)
 
         # Middle Section: Table and Details
         self.middle_layout = QHBoxLayout()
+        self.middle_layout.setSpacing(15)
         
         self.table = QTableView()
         self.middle_layout.addWidget(self.table, 3) # Table takes 3/4
 
         self.details_panel = QPlainTextEdit()
         self.details_panel.setReadOnly(True)
-        self.details_panel.setPlaceholderText("APP DETAILS...")
+        self.details_panel.setPlaceholderText("Select an app to view details...")
         self.details_panel.setObjectName("detailsPanel")
         self.middle_layout.addWidget(self.details_panel, 1) # Details takes 1/4
         
@@ -104,18 +107,24 @@ class MainWindow(QMainWindow):
 
         # Bottom Section: Console & Buttons
         self.bottom_layout = QHBoxLayout()
+        self.bottom_layout.setSpacing(15)
+        
         self.console = QPlainTextEdit()
         self.console.setObjectName("console")
         self.console.setReadOnly(True)
-        self.console.setPlaceholderText("SYSTEM LOGS...")
+        self.console.setPlaceholderText("Ready...")
         self.bottom_layout.addWidget(self.console, 2)
 
         self.button_layout = QVBoxLayout()
-        self.refresh_btn = QPushButton("REFRESH")
+        self.button_layout.setSpacing(10)
+        
+        self.refresh_btn = QPushButton("Refresh List")
         self.button_layout.addWidget(self.refresh_btn)
-        self.update_selected_btn = QPushButton("UPDATE SELECTED")
+        
+        self.update_selected_btn = QPushButton("Update Selected")
         self.button_layout.addWidget(self.update_selected_btn)
-        self.update_all_btn = QPushButton("UPDATE ALL")
+        
+        self.update_all_btn = QPushButton("Update All")
         self.update_all_btn.setObjectName("updateAll")
         self.button_layout.addWidget(self.update_all_btn)
         self.bottom_layout.addLayout(self.button_layout, 1)
