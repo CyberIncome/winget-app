@@ -95,6 +95,12 @@ class MainWindow(QMainWindow):
         self.middle_layout.setSpacing(15)
         
         self.table = QTableView()
+        self.table.setAlternatingRowColors(True)
+        self.table.setShowGrid(True)
+        self.table.setGridStyle(Qt.NoPen) # We'll use QSS for bottom borders if needed
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
         self.middle_layout.addWidget(self.table, 3) # Table takes 3/4
 
         self.details_panel = QPlainTextEdit()
