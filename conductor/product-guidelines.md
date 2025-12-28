@@ -1,20 +1,29 @@
 # Product Guidelines - WingetGui
 
 ## Visual Identity
-- **Theme:** Forced Dark Mode. High-contrast pure blacks (#000000) for the background with deep slate surfaces.
-- **Accents:** Neon blue (#00F2FF) for primary borders and highlights; Electric Green (#39FF14) for successful actions.
-- **Typography:** Monospaced fonts (e.g., Consolas or Cascadia Code) for headers and data tables to reinforce the "terminal" aesthetic.
-- **Glow Effects:** Active update rows should feature a subtle neon green pulse or glow animation to indicate work in progress.
+- **Theme:** Modern Dark Mode with Glassmorphism. 
+- **Palette:** 
+    - Background: Deep Slate (#1A1B26)
+    - Surface: Semi-transparent Charcoal (#24283B, alpha 0.8)
+    - Primary Accent: Soft Electric Blue (#7AA2F7)
+    - Success Accent: Emerald Green (#9ECE6A)
+    - Error Accent: Coral Red (#F7768E)
+- **Typography:** 
+    - UI Elements: Segoe UI, Inter, or system sans-serif.
+    - Data/Logs: Cascadia Code or Consolas (Monospaced).
+- **Effects:** 
+    - Rounded Corners: 8px to 12px on all containers and buttons.
+    - Borders: Subtle 1px solid borders (#414868) to define "glass" edges.
+    - Spacing: High internal padding (10px+) and layout margins (20px) to give content "room to breathe".
 
 ## UI Components
-- **Buttons:** "Command-Center" style. Large, prominent buttons with thick high-contrast borders and clear hover states.
-- **Data Table:** Grid lines should be minimal or dim neon to keep focus on the text. Checkboxes should be high-contrast neon blue.
-- **Integrated Console:** Styled like a standard terminal (black background, light grey text) but embedded seamlessly at the bottom of the layout.
+- **Buttons:** "Glass-Action" style. Rounded corners, semi-transparent backgrounds that brighten on hover.
+- **Data Table:** No vertical grid lines. Alternate row colors using subtle transparency shifts. High cell padding.
+- **Integrated Console:** A soft-edged terminal area with a slightly darker background than the main surface.
 
 ## Communication & Tone
-- **Voice:** Friendly and Action-Oriented.
-- **Style:** Clear, helpful status updates (e.g., "Checking for updates..." instead of "Executing winget -v").
-- **Error Handling:** Use plain English to explain what went wrong and how to fix it, avoiding raw stack traces in the main UI status bar.
+- **Voice:** Professional, modern, and helpful.
+- **Style:** Concise status messages. Avoid "System Initialized" style jargon in favor of "Ready to update".
 
 ## Design Principles
 - **Clarity Over Clutter:** Despite the "Cyber" look, prioritize the readability of the winget data.
