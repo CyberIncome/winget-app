@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QProcess, Signa
 from src.logic.parser import parse_winget_upgrade, parse_winget_show_version, get_total_inventory, check_remote_version, get_registry_data
 from src.logic.executor import WingetExecutor
 import re
+import sys
+import time
 import logging
 import threading
 
@@ -78,6 +80,10 @@ class UpdateModel(QAbstractTableModel):
         id_key = "Id" if not self._is_inventory else "Name"
         return [self._data[i].get(id_key, self._data[i]["Name"]) for i, sel in self._selected.items() if sel]
 
+    def get_all_ids(self):
+        id_key = "Id" if not self._is_inventory else "Name"
+        return [item.get(id_key, item.get("Name")) for item in self._data]
+
 class CustomSortProxy(QSortFilterProxyModel):
     """Sorts Unknown versions to the top."""
     def __init__(self, parent=None):
@@ -127,18 +133,27 @@ class MainWindow(QMainWindow):
         self.process.readyReadStandardOutput.connect(self.handle_stdout)
         self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
+        self.process.errorOccurred.connect(self.handle_process_error)
 
         self.current_operation = None
         self.full_output = ""
         self.unknown_queue = []
         self._cached_reg_data = None
+        self._queue_total = 0
+        self._process_last_output = None
+        self._process_timed_out = False
+        self.process_timeout_secs = 180
+        self.process_timeout_timer = QTimer(self)
+        self.process_timeout_timer.setInterval(5000)
+        self.process_timeout_timer.timeout.connect(self.check_process_timeout)
 
         self.setup_ui()
         self._log_handler = self.setup_logging()
         self.connect_signals()
         
         self.logger.info("UI: Dashboard initialized. Starting background scans...")
-        QTimer.singleShot(100, self.startup_sequence)
+        if "pytest" not in sys.modules:
+            QTimer.singleShot(100, self.startup_sequence)
 
     def setup_logging(self):
         handler = ConsoleLogHandler(self.log_signal)
@@ -153,12 +168,22 @@ class MainWindow(QMainWindow):
         self.refresh_inventory()
 
     def closeEvent(self, event):
-        if hasattr(self, "_log_handler"): logging.getLogger().removeHandler(self._log_handler)
+        if self.process and self.process.state() != QProcess.NotRunning:
+            self.process.terminate()
+            if not self.process.waitForFinished(1000):
+                self.process.kill()
+        if self.process_timeout_timer.isActive():
+            self.process_timeout_timer.stop()
+        if hasattr(self, "_log_handler"):
+            logging.getLogger().removeHandler(self._log_handler)
         super().closeEvent(event)
 
     @Slot(str)
     def append_log(self, message):
-        self.console.appendPlainText(message)
+        try:
+            self.console.appendPlainText(message)
+        except RuntimeError:
+            pass
 
     def setup_ui(self):
         self.central_widget = QWidget()
@@ -212,6 +237,9 @@ class MainWindow(QMainWindow):
         self.button_layout.addWidget(self.scan_inventory_btn)
         self.update_selected_btn = QPushButton("Update Selected")
         self.button_layout.addWidget(self.update_selected_btn)
+        self.update_all_btn = QPushButton("Update All")
+        self.update_all_btn.setObjectName("updateAll")
+        self.button_layout.addWidget(self.update_all_btn)
         self.bottom_layout.addLayout(self.button_layout, 1)
         self.main_layout.addLayout(self.bottom_layout)
 
@@ -228,6 +256,7 @@ class MainWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self.refresh_updates)
         self.scan_inventory_btn.clicked.connect(self.refresh_inventory)
         self.update_selected_btn.clicked.connect(self.update_selected)
+        self.update_all_btn.clicked.connect(self.update_all)
         
         # Data bridge signals
         self.inventory_data_ready.connect(self.set_inventory_model)
@@ -235,21 +264,37 @@ class MainWindow(QMainWindow):
         self.inventory_update_signal.connect(self.apply_inventory_version)
         
         # Initial connections
-        self.table.selectionModel().selectionChanged.connect(self.sync_selection_to_checkboxes)
-        self.inventory_table.selectionModel().selectionChanged.connect(self.sync_selection_to_checkboxes)
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self.sync_selection_to_checkboxes(self.table, self.proxy_model)
+        )
+        self.inventory_table.selectionModel().selectionChanged.connect(
+            lambda *_: self.sync_selection_to_checkboxes(self.inventory_table, self.inventory_proxy)
+        )
 
-    def sync_selection_to_checkboxes(self):
-        table = self.table if self.tabs.currentIndex() == 0 else self.inventory_table
-        proxy = self.proxy_model if self.tabs.currentIndex() == 0 else self.inventory_proxy
+    def sync_selection_to_checkboxes(self, table=None, proxy=None):
+        table = table or (self.table if self.tabs.currentIndex() == 0 else self.inventory_table)
+        proxy = proxy or (self.proxy_model if self.tabs.currentIndex() == 0 else self.inventory_proxy)
         source_model = proxy.sourceModel()
-        if not source_model: return
-        
-        selected_rows = table.selectionModel().selectedRows()
-        for i in range(source_model.rowCount()): source_model._selected[i] = False
+        if not source_model:
+            return
+
+        # Reset selection map to avoid stale or out-of-range keys.
+        source_model._selected = {i: False for i in range(source_model.rowCount())}
+        selected_rows = table.selectionModel().selectedRows() if table.selectionModel() else []
         for proxy_idx in selected_rows:
+            if not proxy_idx.isValid():
+                continue
             source_idx = proxy.mapToSource(proxy_idx)
-            source_model._selected[source_idx.row()] = True
-        source_model.layoutChanged.emit()
+            if not source_idx.isValid():
+                continue
+            row = source_idx.row()
+            if 0 <= row < source_model.rowCount():
+                source_model._selected[row] = True
+
+        if source_model.rowCount() > 0:
+            top_left = source_model.index(0, 0)
+            bottom_right = source_model.index(source_model.rowCount() - 1, 0)
+            source_model.dataChanged.emit(top_left, bottom_right, [Qt.CheckStateRole])
 
     def refresh_updates(self):
         if self.process.state() != QProcess.NotRunning: return
@@ -260,6 +305,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)
         self.process.start("winget", self.executor.get_check_updates_cmd()[1:])
+        self.start_process_watchdog()
 
     def refresh_inventory(self):
         self.logger.info("Inventory: Starting scan thread...")
@@ -273,6 +319,7 @@ class MainWindow(QMainWindow):
                 self.inventory_data_ready.emit(data)
             except Exception as e:
                 self.logger.error(f"Inventory Thread Error: {e}", exc_info=True)
+                self.inventory_data_ready.emit([])
 
         threading.Thread(target=run_scan, daemon=True, name="InventoryScanner").start()
 
@@ -286,7 +333,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         
         # RE-CONNECT Selection Model
-        self.inventory_table.selectionModel().selectionChanged.connect(self.sync_selection_to_checkboxes)
+        self.inventory_table.selectionModel().selectionChanged.connect(
+            lambda *_: self.sync_selection_to_checkboxes(self.inventory_table, self.inventory_proxy)
+        )
         threading.Thread(target=self.inventory_detective_worker, args=(data,), daemon=True).start()
 
     def inventory_detective_worker(self, data):
@@ -309,6 +358,9 @@ class MainWindow(QMainWindow):
             self.logger.info(f"  [HIT] {model._data[index]['Name']}: new version {version}")
 
     def update_selected(self):
+        if self.process.state() != QProcess.NotRunning:
+            self.logger.warning("Winget: Operation already in progress.")
+            return
         proxy = self.proxy_model if self.tabs.currentIndex() == 0 else self.inventory_proxy
         model = proxy.sourceModel()
         if not model: return
@@ -319,7 +371,31 @@ class MainWindow(QMainWindow):
         self.current_operation = "update"
         self.logger.info(f"Updating {len(ids)} applications...")
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 100)
+        self._queue_total = len(ids)
+        self.progress_bar.setRange(0, self._queue_total)
+        self.progress_bar.setValue(0)
+        self.process_queue = ids
+        self.run_next_update()
+
+    def update_all(self):
+        if self.process.state() != QProcess.NotRunning:
+            self.logger.warning("Winget: Operation already in progress.")
+            return
+        proxy = self.proxy_model
+        model = proxy.sourceModel()
+        if not model or model._is_inventory:
+            self.logger.warning("Winget: Refresh updates before using Update All.")
+            return
+        ids = model.get_all_ids()
+        if not ids:
+            self.logger.info("Winget: No updates available.")
+            return
+        self.current_operation = "update"
+        self.logger.info(f"Winget: Updating all ({len(ids)}) applications...")
+        self.progress_bar.setVisible(True)
+        self._queue_total = len(ids)
+        self.progress_bar.setRange(0, self._queue_total)
+        self.progress_bar.setValue(0)
         self.process_queue = ids
         self.run_next_update()
 
@@ -328,36 +404,56 @@ class MainWindow(QMainWindow):
             app_id = self.process_queue.pop(0)
             if app_id.startswith("Portable."):
                 self.logger.warning(f"Skip: {app_id} (manual only)")
+                self.progress_bar.setValue(min(self.progress_bar.value() + 1, self._queue_total))
                 self.run_next_update()
                 return
             self.logger.info(f"Winget: Updating {app_id}")
             cmd = self.executor.get_update_cmd(app_id)
             self.process.start(cmd[0], cmd[1:])
+            self.start_process_watchdog()
         else:
             self.logger.info("UI: Batch update complete.")
             self.progress_bar.setVisible(False)
 
     def handle_stdout(self):
-        data = self.process.readAllStandardOutput().data().decode()
+        data = self.process.readAllStandardOutput().data().decode(errors="replace")
         self.full_output += data
         self.append_log(data.strip())
+        self._process_last_output = time.monotonic()
         match = re.search(r"(\d+)%", data)
         if match:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(int(match.group(1)))
 
     def handle_stderr(self):
-        data = self.process.readAllStandardError().data().decode()
+        data = self.process.readAllStandardError().data().decode(errors="replace")
+        self._process_last_output = time.monotonic()
         self.logger.error(f"CLI: {data.strip()}")
 
+    def handle_process_error(self, error):
+        self.logger.error(f"Winget: Process error {error}")
+        self.progress_bar.setVisible(False)
+
     def process_finished(self, exit_code, exit_status):
+        if self.process_timeout_timer.isActive():
+            self.process_timeout_timer.stop()
         if self.current_operation == "refresh":
             self.logger.info("Winget: Parsing results...")
             threading.Thread(target=self.background_parse_winget, args=(self.full_output,), daemon=True).start()
         elif self.current_operation == "investigate":
             self.process_investigation_result()
-        elif self.current_operation == "update" and hasattr(self, "process_queue") and self.process_queue:
-            self.run_next_update()
+        elif self.current_operation == "update":
+            if self._process_timed_out:
+                self.logger.warning("Winget: Update timed out; moving to next item.")
+                self._process_timed_out = False
+            if hasattr(self, "process_queue"):
+                completed = self._queue_total - len(self.process_queue)
+                self.progress_bar.setValue(max(0, min(completed, self._queue_total)))
+            if hasattr(self, "process_queue") and self.process_queue:
+                self.run_next_update()
+            else:
+                self.logger.info("UI: Batch update complete.")
+                self.progress_bar.setVisible(False)
         else: self.progress_bar.setVisible(False)
 
     def background_parse_winget(self, output):
@@ -370,7 +466,9 @@ class MainWindow(QMainWindow):
         self.proxy_model.setSourceModel(UpdateModel(data))
         self.proxy_model.sort(1, Qt.AscendingOrder)
         self.table.resizeColumnsToContents()
-        self.table.selectionModel().selectionChanged.connect(self.sync_selection_to_checkboxes)
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self.sync_selection_to_checkboxes(self.table, self.proxy_model)
+        )
         self.logger.info(f"Winget: Found {len(data)} updates.")
         self.investigate_unknowns(data)
 
@@ -389,9 +487,24 @@ class MainWindow(QMainWindow):
             item = self.unknown_queue[0]
             self.full_output = ""
             self.process.start("winget", ["show", item["Id"]])
+            self.start_process_watchdog()
         else:
             self.current_operation = None
             self.progress_bar.setVisible(False)
+
+    def start_process_watchdog(self):
+        self._process_last_output = time.monotonic()
+        self._process_timed_out = False
+        if not self.process_timeout_timer.isActive():
+            self.process_timeout_timer.start()
+
+    def check_process_timeout(self):
+        if self.process.state() == QProcess.NotRunning or self._process_last_output is None:
+            return
+        if time.monotonic() - self._process_last_output > self.process_timeout_secs:
+            self._process_timed_out = True
+            self.logger.warning("Winget: No output detected; cancelling hung process.")
+            self.process.kill()
 
     def process_investigation_result(self):
         if not self.unknown_queue: return
