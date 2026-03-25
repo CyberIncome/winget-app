@@ -28,8 +28,8 @@ from src.logic.parser import (
     get_registry_data,
     check_remote_version,
     is_version_newer,
-    URL_FALLBACKS,
 )
+from src.logic.config import ConfigManager
 from src.logic.executor import WingetExecutor, validate_app_id
 
 
@@ -387,10 +387,11 @@ def detective(ctx, limit):
     results = []
     checked = 0
 
+    config = ConfigManager()
     for item in data:
         url = item.get("URL")
         if not url:
-            for key, fallback in URL_FALLBACKS.items():
+            for key, fallback in config.url_fallbacks.items():
                 if key in item["Name"].lower():
                     url = fallback
                     break
@@ -399,8 +400,9 @@ def detective(ctx, limit):
         if not (
             "github.com" in url
             or "release" in url.lower()
-            or url in URL_FALLBACKS.values()
+            or url in config.url_fallbacks.values()
         ):
+
             continue
 
         checked += 1

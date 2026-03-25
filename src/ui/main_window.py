@@ -1,31 +1,35 @@
 from collections import deque
-
-from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTableView, QPlainTextEdit, QPushButton, QLabel,
-    QProgressBar, QTabWidget, QHeaderView, QFrame,
-    QLineEdit, QMenu, QStatusBar, QApplication,
-)
-from PySide6.QtCore import (
-    Qt, QAbstractTableModel, QModelIndex, QProcess,
-    Signal, Slot, QSortFilterProxyModel, QTimer,
-)
-from PySide6.QtGui import QShortcut, QKeySequence
-
-from src.logic.parser import (
-    parse_winget_upgrade, parse_winget_show_version,
-    get_total_inventory, check_remote_version,
-    get_registry_data, URL_FALLBACKS,
-)
-from src.logic.executor import WingetExecutor
-
 import os
 import re
 import sys
 import time
 import logging
 import threading
+import ctypes
+from typing import Optional, Set
 
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QTableView, QPlainTextEdit, QPushButton, QLabel,
+    QProgressBar, QHeaderView, QFrame,
+    QLineEdit, QMenu, QApplication,
+    QSplitter, QListWidget, QListWidgetItem, QStackedWidget
+)
+from PySide6.QtCore import (
+    Qt, QAbstractTableModel, QModelIndex, QProcess,
+    Signal, Slot, QSortFilterProxyModel, QTimer,
+    QItemSelectionModel, QProcessEnvironment,
+)
+from PySide6.QtGui import QShortcut, QKeySequence
+import requests
+
+from src.logic.parser import (
+    parse_winget_upgrade, parse_winget_show_version,
+    get_total_inventory, check_remote_version,
+    get_registry_data,
+)
+from src.logic.config import ConfigManager
+from src.logic.executor import WingetExecutor
 
 # ── Logging bridge ──────────────────────────────────
 
@@ -40,16 +44,10 @@ class ConsoleLogHandler(logging.Handler):
         except RuntimeError:
             pass
 
-
 # ── Stat Card Widget ────────────────────────────────
 
 class StatCard(QFrame):
-    """Dashboard summary card with icon, value, title."""
-
-    def __init__(
-        self, icon, title, value="—",
-        object_name="statCard",
-    ):
+    def __init__(self, icon, title, value="—", object_name="statCard"):
         super().__init__()
         self.setObjectName(object_name)
         layout = QVBoxLayout(self)
@@ -75,26 +73,23 @@ class StatCard(QFrame):
     def set_value(self, value):
         self.value_label.setText(str(value))
 
-
 # ── Table Model ─────────────────────────────────────
 
 class UpdateModel(QAbstractTableModel):
+    check_toggled = Signal(int, bool)
+
     def __init__(self, data=None, is_inventory=False):
         super().__init__()
         self._data = data or []
         self._is_inventory = is_inventory
-        self._selected = {
-            i: False for i in range(len(self._data))
-        }
+        self._selected = {item.get("Id") or item.get("Name"): False for item in self._data}
+        self._syncing = False
+
+        
         if is_inventory:
-            self.headers = [
-                "", "Name", "Version", "Available",
-                "Type", "Managed",
-            ]
+            self.headers = ["", "Name", "Version", "Available", "Type", "Managed"]
         else:
-            self.headers = [
-                "", "Name", "ID", "Version", "Available",
-            ]
+            self.headers = ["", "Name", "ID", "Version", "Available"]
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._data)
@@ -103,47 +98,31 @@ class UpdateModel(QAbstractTableModel):
         return len(self.headers)
 
     def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid():
-            return None
+        if not index.isValid(): return None
         row, col = index.row(), index.column()
+        item = self._data[row]
+        
         if role == Qt.DisplayRole:
-            if col == 0:
-                return ""
-            item = self._data[row]
-            if self._is_inventory:
-                keys = [
-                    "", "Name", "Version", "Available",
-                    "Type", "Managed",
-                ]
+            if col == 0: return ""
+            if not self._is_inventory:
+                keys = ["", "Name", "Id", "Version", "Available"]
                 return item.get(keys[col], "")
             else:
-                key_map = {
-                    "Name": "Name", "ID": "Id",
-                    "Version": "Version",
-                    "Available": "Available",
-                }
-                return item.get(
-                    key_map.get(self.headers[col]), ""
-                )
+                keys = ["", "Name", "Version", "Available", "Type", "Managed"]
+                return item.get(keys[col], "")
+                
         if role == Qt.CheckStateRole and col == 0:
-            return (
-                Qt.Checked
-                if self._selected.get(row, False)
-                else Qt.Unchecked
-            )
+            return Qt.Checked if self._selected.get(item.get("Id") or item.get("Name"), False) else Qt.Unchecked
+            
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
-        if (
-            role == Qt.CheckStateRole
-            and index.column() == 0
-        ):
-            self._selected[index.row()] = (
-                value == Qt.Checked
-            )
-            self.dataChanged.emit(
-                index, index, [Qt.CheckStateRole]
-            )
+        if role == Qt.CheckStateRole and index.column() == 0:
+            checked = value in (2, Qt.Checked, getattr(Qt.CheckState, "Checked", 2))
+            item = self._data[index.row()]
+            self._selected[item.get("Id") or item.get("Name")] = checked
+            self.dataChanged.emit(index, index, [Qt.CheckStateRole])
+            self.check_toggled.emit(index.row(), checked)
             return True
         return False
 
@@ -153,80 +132,42 @@ class UpdateModel(QAbstractTableModel):
             f |= Qt.ItemIsUserCheckable
         return f
 
-    def headerData(
-        self, section, orientation,
-        role=Qt.DisplayRole,
-    ):
-        if (
-            orientation == Qt.Horizontal
-            and role == Qt.DisplayRole
-        ):
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
             return self.headers[section]
         return None
 
     def get_selected_ids(self):
-        k = "Id" if not self._is_inventory else "Name"
-        return [
-            self._data[i].get(k, self._data[i]["Name"])
-            for i, sel in self._selected.items() if sel
-        ]
+        return [id_ for id_, sel in self._selected.items() if sel]
 
     def get_all_ids(self):
-        k = "Id" if not self._is_inventory else "Name"
-        return [
-            item.get(k, item.get("Name"))
-            for item in self._data
-        ]
-
+        return [item.get("Id") or item.get("Name") for item in self._data]
 
 # ── Sort Proxy ──────────────────────────────────────
 
 class CustomSortProxy(QSortFilterProxyModel):
-    """Sorts Unknown versions to the top."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setDynamicSortFilter(True)
-        self.setFilterCaseSensitivity(
-            Qt.CaseInsensitive
-        )
+        self.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.setFilterKeyColumn(-1)
 
     def lessThan(self, left, right):
         source = self.sourceModel()
-        if (
-            not source
-            or not hasattr(source, "_data")
-            or not source._data
-        ):
+        if not source or not hasattr(source, "_data") or not source._data:
             return super().lessThan(left, right)
         try:
             lr, rr = left.row(), right.row()
-            if (
-                lr >= len(source._data)
-                or rr >= len(source._data)
-            ):
+            if lr >= len(source._data) or rr >= len(source._data):
                 return super().lessThan(left, right)
-            lv = str(
-                source._data[lr].get("Version", "")
-            ).lower()
-            rv = str(
-                source._data[rr].get("Version", "")
-            ).lower()
+            lv = str(source._data[lr].get("Version", "")).lower()
+            rv = str(source._data[rr].get("Version", "")).lower()
             lu = "unknown" in lv or "???" in lv
             ru = "unknown" in rv or "???" in rv
-            if lu and not ru:
-                return (
-                    self.sortOrder() == Qt.AscendingOrder
-                )
-            if not lu and ru:
-                return (
-                    self.sortOrder() == Qt.DescendingOrder
-                )
-        except (IndexError, KeyError):
-            pass
+            if lu and not ru: return self.sortOrder() == Qt.AscendingOrder
+            if not lu and ru: return self.sortOrder() == Qt.DescendingOrder
+        except (IndexError, KeyError): pass
         return super().lessThan(left, right)
-
 
 # ── Main Window ─────────────────────────────────────
 
@@ -235,6 +176,8 @@ class MainWindow(QMainWindow):
     inventory_data_ready = Signal(list)
     winget_data_ready = Signal(list)
     inventory_update_signal = Signal(int, str)
+    detective_finished = Signal()
+    rate_limit_signal = Signal(dict)
 
     def __init__(self):
         super().__init__()
@@ -244,552 +187,414 @@ class MainWindow(QMainWindow):
         self.logger = logging.getLogger(__name__)
         self.executor = WingetExecutor()
         self.process = QProcess(self)
-        self.process.readyReadStandardOutput.connect(
-            self.handle_stdout
-        )
-        self.process.readyReadStandardError.connect(
-            self.handle_stderr
-        )
+        self.process.readyReadStandardOutput.connect(self.handle_stdout)
+        self.process.readyReadStandardError.connect(self.handle_stderr)
         self.process.finished.connect(self.process_finished)
-        self.process.errorOccurred.connect(
-            self.handle_process_error
-        )
+        self.process.errorOccurred.connect(self.handle_process_error)
 
-        self.current_operation = None
-        self.full_output = ""
-        self._max_output_bytes = 5 * 1024 * 1024
-        self.unknown_queue = deque()
-        self._cached_reg_data = None
-        self._reg_data_lock = threading.Lock()
-        self._queue_total = 0
-        self._process_last_output = None
-        self._process_timed_out = False
-        self.process_timeout_secs = 180
-        self._last_scan_time = None
-        self._stat_installed = 0
-        self._stat_updates = 0
-        self._stat_unknown = 0
+        self.current_operation: Optional[str] = None
+        self.full_output: str = ""
+        self._max_output_bytes: int = 5 * 1024 * 1024
+        self.unknown_queue: deque = deque()
+        self._cached_reg_data: Optional[list] = None
+        self._reg_data_lock: threading.Lock = threading.Lock()
+        self._queue_total: int = 0
+        self._process_last_output: Optional[float] = None
+        self._process_timed_out: bool = False
+        self.process_timeout_secs: int = 180
+        self._last_scan_time: Optional[str] = None
+        self._stat_installed: int = 0
+        self._stat_updates: int = 0
+        self._stat_unknown: int = 0
+        self._active_tasks: Set[str] = set()
+        self._operation_lock: threading.Lock = threading.Lock()
+        self._is_admin = self.check_admin_status()
 
         self.process_timeout_timer = QTimer(self)
         self.process_timeout_timer.setInterval(5000)
-        self.process_timeout_timer.timeout.connect(
-            self.check_process_timeout
-        )
+        self.process_timeout_timer.timeout.connect(self.check_process_timeout)
 
         self.setup_ui()
         self._log_handler = self.setup_logging()
         self.connect_signals()
 
-        self.logger.info(
-            "Dashboard initialized. Starting scans..."
-        )
+        self.logger.info("Dashboard initialized. Starting scans...")
         if "pytest" not in sys.modules:
-            QTimer.singleShot(100, self.startup_sequence)
-
-    # ── Logging ─────────────────────────────────────
+            QTimer.singleShot(500, self.startup_sequence)
 
     def setup_logging(self):
         handler = ConsoleLogHandler(self.log_signal)
-        fmt = logging.Formatter(
-            '%(asctime)s  %(levelname)s  %(message)s',
-            datefmt='%H:%M:%S',
-        )
+        fmt = logging.Formatter('%(asctime)s  %(levelname)s  %(message)s', datefmt='%H:%M:%S')
         handler.setFormatter(fmt)
-        logging.getLogger('src').addHandler(handler)
+        logging.getLogger().addHandler(handler)
         self.log_signal.connect(self.append_log)
         return handler
+
+    def check_admin_status(self):
+        try: return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except: return False
 
     def startup_sequence(self):
         self.refresh_updates()
         self.refresh_inventory()
+        self.update_github_api_status()
 
     def closeEvent(self, event):
-        if (
-            self.process
-            and self.process.state() != QProcess.NotRunning
-        ):
+        if self.process and self.process.state() != QProcess.NotRunning:
             self.process.terminate()
-            if not self.process.waitForFinished(1000):
-                self.process.kill()
-        if self.process_timeout_timer.isActive():
-            self.process_timeout_timer.stop()
-        if hasattr(self, "_log_handler"):
-            logging.getLogger('src').removeHandler(
-                self._log_handler
-            )
+            if not self.process.waitForFinished(1000): self.process.kill()
+        if self.process_timeout_timer.isActive(): self.process_timeout_timer.stop()
         super().closeEvent(event)
 
     @Slot(str)
     def append_log(self, message):
-        try:
-            self.console.appendPlainText(message)
-        except RuntimeError:
-            pass
-
-    # ── UI Setup ────────────────────────────────────
+        try: self.console.appendPlainText(message)
+        except: pass
 
     def setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(24, 20, 24, 0)
-        root.setSpacing(16)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # ── Header row ──
-        header_row = QHBoxLayout()
+        # Header
+        header_row = QWidget()
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(24, 20, 24, 16)
+        
         header_left = QVBoxLayout()
         header_left.setSpacing(2)
         title = QLabel("Winget Universal Dashboard")
         title.setObjectName("headerLabel")
-        subtitle = QLabel(
-            "Package manager  •  System inventory"
-        )
-        subtitle.setObjectName("headerSubtitle")
         header_left.addWidget(title)
+        
+        if not self._is_admin:
+            self.admin_warning = QLabel("🛡️ NON-ELEVATED")
+            self.admin_warning.setObjectName("adminWarning")
+            header_left.addWidget(self.admin_warning)
+
+        subtitle = QLabel("Package manager  •  System inventory")
+        subtitle.setObjectName("headerSubtitle")
         header_left.addWidget(subtitle)
-        header_row.addLayout(header_left)
-        header_row.addStretch()
+
+        self.activity_banner = QWidget()
+        self.activity_banner.setObjectName("activityBanner")
+        self.activity_banner.setVisible(False)
+        ab_layout = QHBoxLayout(self.activity_banner)
+        ab_layout.setContentsMargins(0, 4, 0, 0)
+        self.activity_status = QLabel("READY")
+        self.activity_status.setObjectName("activityStatus")
+        self.activity_progress = QLabel("")
+        self.activity_progress.setObjectName("activityProgress")
+        ab_layout.addWidget(self.activity_status)
+        ab_layout.addWidget(self.activity_progress)
+        ab_layout.addStretch()
+        header_left.addWidget(self.activity_banner)
+        
+        header_layout.addLayout(header_left)
+        header_layout.addStretch()
 
         self.search_bar = QLineEdit()
         self.search_bar.setObjectName("searchBar")
-        self.search_bar.setPlaceholderText(
-            "Search applications..."
-        )
-        self.search_bar.setClearButtonEnabled(True)
+        self.search_bar.setPlaceholderText("Search applications (Ctrl+F)...")
         self.search_bar.setFixedWidth(300)
-        header_row.addWidget(self.search_bar)
-        root.addLayout(header_row)
+        header_layout.addWidget(self.search_bar)
+        root.addWidget(header_row)
 
-        # ── Stat cards ──
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(12)
-        self.stat_installed = StatCard(
-            "📦", "Installed Apps", "—",
-            "statCardPrimary",
-        )
-        self.stat_updates = StatCard(
-            "🔄", "Updates Available", "—",
-            "statCardSuccess",
-        )
-        self.stat_unknown = StatCard(
-            "⚠", "Unknown Versions", "—",
-            "statCardWarning",
-        )
-        self.stat_scan = StatCard(
-            "🕐", "Last Scan", "—", "statCard",
-        )
-        for card in [
-            self.stat_installed, self.stat_updates,
-            self.stat_unknown, self.stat_scan,
-        ]:
+        # Stats
+        stats_widget = QWidget()
+        stats_row = QHBoxLayout(stats_widget)
+        stats_row.setContentsMargins(24, 0, 24, 16)
+        self.stat_installed = StatCard("📦", "Installed Apps")
+        self.stat_updates = StatCard("🔄", "Updates Available")
+        self.stat_unknown = StatCard("⚠", "Unknown Versions")
+        self.stat_scan = StatCard("🕐", "Last Scan")
+        for card in [self.stat_installed, self.stat_updates, self.stat_unknown, self.stat_scan]:
             stats_row.addWidget(card)
-        root.addLayout(stats_row)
+        root.addWidget(stats_widget)
 
-        # ── Tabs ──
-        self.tabs = QTabWidget()
+        # Main
+        splitter = QSplitter(Qt.Horizontal)
+        root.addWidget(splitter, 1)
 
-        # Tab 1: Updates
+        self.sidebar = QListWidget()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setMinimumWidth(150)
+        self.sidebar.setMaximumWidth(300)
+        items = [("🚀  Updates", "Updates"), ("📦  Inventory", "Inventory"), ("⚙️  Settings", "Settings")]
+        for icon_text, _ in items:
+            item = QListWidgetItem(icon_text)
+            self.sidebar.addItem(item)
+        splitter.addWidget(self.sidebar)
+        splitter.setStretchFactor(0, 0)
+        
+        self.stack = QStackedWidget()
+        splitter.addWidget(self.stack)
+        splitter.setStretchFactor(1, 1)
+        self.sidebar.currentRowChanged.connect(self.stack.setCurrentIndex)
+
+        # Page 0: Updates
         self.update_tab = QWidget()
         ul = QVBoxLayout(self.update_tab)
-        ul.setContentsMargins(0, 8, 0, 0)
+        self.update_splitter = QSplitter(Qt.Horizontal)
+        ul.addWidget(self.update_splitter)
         self.table = QTableView()
         self.proxy_model = CustomSortProxy()
         self.table.setModel(self.proxy_model)
         self.setup_table(self.table)
-        self.table.setContextMenuPolicy(
-            Qt.CustomContextMenu
-        )
-        self.table.customContextMenuRequested.connect(
-            lambda pos: self.show_context_menu(
-                pos, self.table, self.proxy_model
-            )
-        )
-        ul.addWidget(self.table)
-        self.tabs.addTab(
-            self.update_tab, "  Updates Available  "
-        )
+        self.update_splitter.addWidget(self.table)
+        self.update_details = QPlainTextEdit("Select an app to view details...")
+        self.update_details.setReadOnly(True)
+        self.update_splitter.addWidget(self.update_details)
+        self.update_splitter.setSizes([1000, 300])
+        self.stack.addWidget(self.update_tab)
 
-        # Tab 2: Inventory
+        # Page 1: Inventory
         self.inventory_tab = QWidget()
         il = QVBoxLayout(self.inventory_tab)
-        il.setContentsMargins(0, 8, 0, 0)
+        self.inventory_splitter = QSplitter(Qt.Horizontal)
+        il.addWidget(self.inventory_splitter)
         self.inventory_table = QTableView()
         self.inventory_proxy = CustomSortProxy()
-        self.inventory_table.setModel(
-            self.inventory_proxy
-        )
+        self.inventory_table.setModel(self.inventory_proxy)
         self.setup_table(self.inventory_table)
-        self.inventory_table.setContextMenuPolicy(
-            Qt.CustomContextMenu
-        )
-        self.inventory_table.customContextMenuRequested.connect(
-            lambda pos: self.show_context_menu(
-                pos, self.inventory_table,
-                self.inventory_proxy,
-            )
-        )
-        il.addWidget(self.inventory_table)
-        self.tabs.addTab(
-            self.inventory_tab,
-            "  System Inventory  ",
-        )
-        root.addWidget(self.tabs, 1)
+        self.inventory_splitter.addWidget(self.inventory_table)
+        self.inventory_details = QPlainTextEdit("Select an app to view details...")
+        self.inventory_details.setReadOnly(True)
+        self.inventory_splitter.addWidget(self.inventory_details)
+        self.inventory_splitter.setSizes([1000, 300])
+        self.stack.addWidget(self.inventory_tab)
 
-        # ── Bottom: Console + Buttons ──
-        # Console toggle
-        toggle_row = QHBoxLayout()
-        self.toggle_console_btn = QPushButton(
-            "▼  Console"
-        )
-        self.toggle_console_btn.setObjectName(
-            "toggleConsole"
-        )
-        self.toggle_console_btn.clicked.connect(
-            self.toggle_console
-        )
-        toggle_row.addWidget(self.toggle_console_btn)
-        toggle_row.addStretch()
-        root.addLayout(toggle_row)
+        # Page 2: Settings
+        self.settings_tab = QWidget()
+        sl = QVBoxLayout(self.settings_tab)
+        sl.setContentsMargins(24, 24, 24, 24)
+        
+        self.pat_input = QLineEdit()
+        self.pat_input.setPlaceholderText("ghp_...")
+        self.pat_input.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        self.pat_input.setText(ConfigManager().github_pat or "")
+        def on_pat_changed(t):
+            ConfigManager().set("github_pat", t)
+            self.update_github_api_status()
+        self.pat_input.textChanged.connect(on_pat_changed)
+        sl.addWidget(QLabel("GitHub Personal Access Token (PAT)"))
+        sl.addWidget(self.pat_input)
+        
+        # API Status
+        api_group = QWidget()
+        api_group.setObjectName("apiStatusGroup")
+        al = QVBoxLayout(api_group)
+        self.api_status_lbl = QLabel("Checking status...")
+        self.api_reset_lbl = QLabel("")
+        self.api_refresh_btn = QPushButton("↻  Refresh API Status")
+        self.api_refresh_btn.clicked.connect(self.update_github_api_status)
+        al.addWidget(QLabel("GitHub API Capacity"))
+        al.addWidget(self.api_status_lbl)
+        al.addWidget(self.api_reset_lbl)
+        al.addWidget(self.api_refresh_btn)
+        sl.addWidget(api_group)
+        sl.addStretch()
+        self.stack.addWidget(self.settings_tab)
 
-        bottom = QHBoxLayout()
-        bottom.setSpacing(16)
+        # Bottom
+        bw = QWidget()
+        bottom = QHBoxLayout(bw)
+        bottom.setContentsMargins(24, 16, 24, 16)
         self.console = QPlainTextEdit()
         self.console.setObjectName("console")
         self.console.setReadOnly(True)
-        self.console.setMaximumHeight(180)
         self.console.setVisible(False)
-        bottom.addWidget(self.console, 3)
-
+        bottom.addWidget(self.console, 4)
+        
         btn_col = QVBoxLayout()
-        btn_col.setSpacing(8)
         self.refresh_btn = QPushButton("↻  Refresh Updates")
-        self.scan_inventory_btn = QPushButton(
-            "↻  Refresh Inventory"
-        )
-        self.update_selected_btn = QPushButton(
-            "⬆  Update Selected"
-        )
-        self.update_selected_btn.setObjectName(
-            "updateSelected"
-        )
-        self.update_all_btn = QPushButton(
-            "⬆  Update All"
-        )
+        self.scan_inventory_btn = QPushButton("↻  Refresh Inventory")
+        self.update_selected_btn = QPushButton("⬆  Update Selected")
+        self.update_selected_btn.setObjectName("updateSelected")
+        self.update_all_btn = QPushButton("⬆  Update All")
         self.update_all_btn.setObjectName("updateAll")
-        for btn in [
-            self.refresh_btn, self.scan_inventory_btn,
-            self.update_selected_btn, self.update_all_btn,
-        ]:
-            btn_col.addWidget(btn)
-        btn_col.addStretch()
+        self.toggle_console_btn = QPushButton("▼  Console")
+        self.toggle_console_btn.setObjectName("toggleConsole")
+        for b in [self.refresh_btn, self.scan_inventory_btn, self.update_selected_btn, self.update_all_btn, self.toggle_console_btn]:
+            btn_col.addWidget(b)
         bottom.addLayout(btn_col, 1)
-        root.addLayout(bottom)
+        root.addWidget(bw)
 
-        # ── Status Bar ──
+        # Status Bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedWidth(200)
         self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedWidth(200)
         self.status_label = QLabel("Ready")
-        sb = self.statusBar()
-        sb.addWidget(self.progress_bar)
-        sb.addPermanentWidget(self.status_label)
+        self.statusBar().addWidget(self.progress_bar)
+        self.statusBar().addPermanentWidget(self.status_label)
 
-        # ── Keyboard Shortcuts ──
-        QShortcut(
-            QKeySequence("Ctrl+F"), self,
-            activated=lambda: self.search_bar.setFocus(),
-        )
+        QShortcut(QKeySequence("Ctrl+F"), self, activated=lambda: self.search_bar.setFocus())
+        self.sidebar.setCurrentRow(0)
 
     def setup_table(self, table):
         table.setAlternatingRowColors(True)
         table.setShowGrid(False)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setStretchLastSection(
-            True
-        )
         table.setSelectionBehavior(QTableView.SelectRows)
-        table.setSelectionMode(
-            QTableView.ExtendedSelection
-        )
+        table.setSelectionMode(QTableView.ExtendedSelection)
         table.setSortingEnabled(True)
+        table.clicked.connect(lambda idx: self.handle_table_click(table, idx))
+
+    def handle_table_click(self, table, index):
+        proxy = table.model()
+        pane = self.update_details if table == self.table else self.inventory_details
+        self.update_detail_pane(table, proxy, pane)
+
+    def update_detail_pane(self, table, proxy, pane):
+        indexes = table.selectionModel().selectedRows()
+        if not indexes:
+            pane.setPlainText("Select an app to view details...")
+            return
+        source = proxy.mapToSource(indexes[0])
+        model = proxy.sourceModel()
+        if not model or source.row() >= len(model._data): return
+        item = model._data[source.row()]
+        details = f"=== {item.get('Name', 'Unknown')} ===\n\n"
+        for k, v in item.items(): details += f"{k}: {v}\n"
+        pane.setPlainText(details)
+
+    def set_ui_busy(self, status, busy, task_name="core"):
+        if busy: self._active_tasks.add(task_name)
+        else: self._active_tasks.discard(task_name)
+        
+        is_busy = bool(self._active_tasks)
+        self.activity_banner.setVisible(is_busy)
+        self.progress_bar.setVisible(is_busy)
+        self.refresh_btn.setEnabled(not is_busy)
+        self.scan_inventory_btn.setEnabled(not is_busy)
+        self.update_selected_btn.setEnabled(not is_busy)
+        self.update_all_btn.setEnabled(not is_busy)
+        
+        if is_busy:
+            self.activity_status.setText(status.upper())
+            self.status_label.setText(status)
+            # Use marquee mode (0,0) for indeterminate tasks like scanning
+            if task_name in ["refresh", "inventory", "detective"]:
+                self.progress_bar.setRange(0, 0)
+            else:
+                self.progress_bar.setRange(0, 100)
+        else:
+            self.update_stats()
+            self.activity_status.setText("READY")
+            self.status_label.setText("Ready")
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
 
     def connect_signals(self):
-        self.refresh_btn.clicked.connect(
-            self.refresh_updates
-        )
-        self.scan_inventory_btn.clicked.connect(
-            self.refresh_inventory
-        )
-        self.update_selected_btn.clicked.connect(
-            self.update_selected
-        )
-        self.update_all_btn.clicked.connect(
-            self.update_all
-        )
-        self.search_bar.textChanged.connect(
-            self.filter_tables
-        )
-        self.inventory_data_ready.connect(
-            self.set_inventory_model
-        )
-        self.winget_data_ready.connect(
-            self.apply_winget_results
-        )
-        self.inventory_update_signal.connect(
-            self.apply_inventory_version
-        )
-        self.table.selectionModel().selectionChanged.connect(
-            lambda *_: self.sync_selection_to_checkboxes(
-                self.table, self.proxy_model
-            )
-        )
-        self.inventory_table.selectionModel().selectionChanged.connect(
-            lambda *_: self.sync_selection_to_checkboxes(
-                self.inventory_table, self.inventory_proxy
-            )
-        )
+        self.refresh_btn.clicked.connect(self.refresh_updates)
+        self.scan_inventory_btn.clicked.connect(self.refresh_inventory)
+        self.update_selected_btn.clicked.connect(self.update_selected)
+        self.update_all_btn.clicked.connect(self.update_all)
+        self.search_bar.textChanged.connect(self.filter_tables)
+        self.inventory_data_ready.connect(self.set_inventory_model)
+        self.winget_data_ready.connect(self.apply_winget_results)
+        self.inventory_update_signal.connect(self.apply_inventory_version)
+        self.detective_finished.connect(lambda: self.set_ui_busy("Detective: Finished.", False, "detective"))
+        self.rate_limit_signal.connect(self.display_rate_limit)
+        self.toggle_console_btn.clicked.connect(self.toggle_console)
 
-    # ── UI Helpers ──────────────────────────────────
+    def handle_native_checkbox(self, table, proxy, source_row, checked):
+        # This method is now primarily for updating the model's internal _selected state
+        # based on user interaction with the checkbox.
+        # The selection model is no longer directly tied to checkboxes.
+        pass
+
+    def sync_selection_to_checkboxes(self, table, proxy):
+        # This method is no longer needed as selection and checkboxes are decoupled.
+        pass
 
     def toggle_console(self):
-        vis = self.console.isVisible()
-        self.console.setVisible(not vis)
-        self.toggle_console_btn.setText(
-            "▶  Console" if vis else "▼  Console"
-        )
+        v = not self.console.isVisible()
+        self.console.setVisible(v)
+        self.toggle_console_btn.setText("▼  Console" if v else "▶  Console")
 
     def filter_tables(self, text):
         self.proxy_model.setFilterRegularExpression(text)
-        self.inventory_proxy.setFilterRegularExpression(
-            text
-        )
+        self.inventory_proxy.setFilterRegularExpression(text)
 
     def update_stats(self):
         self.stat_installed.set_value(self._stat_installed)
         self.stat_updates.set_value(self._stat_updates)
         self.stat_unknown.set_value(self._stat_unknown)
-        if self._last_scan_time:
-            self.stat_scan.set_value(self._last_scan_time)
-        parts = []
-        if self._last_scan_time:
-            parts.append(
-                f"Last scan: {self._last_scan_time}"
-            )
-        parts.append(f"{self._stat_installed} apps")
-        if self._stat_updates:
-            parts.append(
-                f"{self._stat_updates} updates"
-            )
-        self.status_label.setText("  ·  ".join(parts))
-
-    def show_context_menu(self, position, table, proxy):
-        index = table.indexAt(position)
-        if not index.isValid():
-            return
-        source = proxy.mapToSource(index)
-        model = proxy.sourceModel()
-        if not model or source.row() >= len(model._data):
-            return
-        item = model._data[source.row()]
-
-        menu = QMenu(self)
-        act_update = menu.addAction(
-            f"⬆  Update {item.get('Name', '')}"
-        )
-        menu.addSeparator()
-        act_copy = menu.addAction("📋  Copy ID")
-        path = item.get("Path")
-        act_open = None
-        if path and os.path.exists(
-            path if os.path.isdir(path)
-            else os.path.dirname(path)
-        ):
-            act_open = menu.addAction(
-                "📂  Open Install Location"
-            )
-
-        action = menu.exec(table.viewport().mapToGlobal(
-            position
-        ))
-        if action == act_update:
-            app_id = item.get("Id", item.get("Name", ""))
-            self._start_single_update(app_id)
-        elif action == act_copy:
-            app_id = item.get("Id", item.get("Name", ""))
-            QApplication.clipboard().setText(app_id)
-            self.logger.info(f"Copied: {app_id}")
-        elif act_open and action == act_open:
-            folder = (
-                path if os.path.isdir(path)
-                else os.path.dirname(path)
-            )
-            os.startfile(folder)
-
-    def _start_single_update(self, app_id):
-        if self.process.state() != QProcess.NotRunning:
-            self.logger.warning(
-                "Operation already in progress."
-            )
-            return
-        self.current_operation = "update"
-        self._queue_total = 1
-        self.process_queue = deque([app_id])
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 1)
-        self.progress_bar.setValue(0)
-        self.run_next_update()
-
-    def sync_selection_to_checkboxes(
-        self, table=None, proxy=None,
-    ):
-        table = table or (
-            self.table
-            if self.tabs.currentIndex() == 0
-            else self.inventory_table
-        )
-        proxy = proxy or (
-            self.proxy_model
-            if self.tabs.currentIndex() == 0
-            else self.inventory_proxy
-        )
-        source_model = proxy.sourceModel()
-        if not source_model:
-            return
-        source_model._selected = {
-            i: False
-            for i in range(source_model.rowCount())
-        }
-        rows = (
-            table.selectionModel().selectedRows()
-            if table.selectionModel() else []
-        )
-        for pi in rows:
-            if not pi.isValid():
-                continue
-            si = proxy.mapToSource(pi)
-            if si.isValid():
-                r = si.row()
-                if 0 <= r < source_model.rowCount():
-                    source_model._selected[r] = True
-        if source_model.rowCount() > 0:
-            tl = source_model.index(0, 0)
-            br = source_model.index(
-                source_model.rowCount() - 1, 0
-            )
-            source_model.dataChanged.emit(
-                tl, br, [Qt.CheckStateRole]
-            )
-
-    # ── Data Operations ─────────────────────────────
+        if self._last_scan_time: self.stat_scan.set_value(self._last_scan_time)
 
     def refresh_updates(self):
-        if self.process.state() != QProcess.NotRunning:
-            return
-        self.logger.info("Scanning for updates...")
-        self.tabs.setCurrentIndex(0)
-        self.current_operation = "refresh"
-        self.full_output = ""
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
-        self.process.start(
-            "winget",
-            self.executor.get_check_updates_cmd()[1:],
-        )
-        self.start_process_watchdog()
+        with self._operation_lock:
+            if self.process.state() != QProcess.NotRunning: return
+            self.set_ui_busy("Scanning for updates...", True, "refresh")
+            self.current_operation = "refresh"
+            self.full_output = ""
+            
+            # Prevent winget from truncating output columns
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("COLUMNS", "300")
+            self.process.setProcessEnvironment(env)
+            
+            self.process.start("winget", self.executor.get_check_updates_cmd()[1:])
+            self.start_process_watchdog()
 
     def refresh_inventory(self):
-        self.logger.info("Starting inventory scan...")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
+        if "inventory" in self._active_tasks: return
+        self.set_ui_busy("Scanning system inventory...", True, "inventory")
+        threading.Thread(target=self._run_inventory_scan, daemon=True).start()
 
-        def run_scan():
-            try:
-                with self._reg_data_lock:
-                    if not self._cached_reg_data:
-                        self._cached_reg_data = (
-                            get_registry_data()
-                        )
-                    rd = self._cached_reg_data
-                data = get_total_inventory(reg_data=rd)
-                self.inventory_data_ready.emit(data)
-            except Exception as e:
-                self.logger.error(
-                    f"Inventory error: {e}",
-                    exc_info=True,
-                )
-                self.inventory_data_ready.emit([])
-
-        threading.Thread(
-            target=run_scan, daemon=True,
-            name="InventoryScanner",
-        ).start()
+    def _run_inventory_scan(self):
+        try:
+            with self._reg_data_lock:
+                if not self._cached_reg_data: self._cached_reg_data = get_registry_data()
+                rd = self._cached_reg_data
+            data = get_total_inventory(reg_data=rd)
+            self.inventory_data_ready.emit(data)
+        except Exception as e:
+            self.logger.error(f"Inventory error: {e}")
+            self.inventory_data_ready.emit([])
 
     @Slot(list)
     def set_inventory_model(self, data):
-        self.logger.info(
-            f"Inventory: {len(data)} items found."
-        )
         model = UpdateModel(data, is_inventory=True)
+        model.check_toggled.connect(lambda r, c: self.handle_native_checkbox(self.inventory_table, self.inventory_proxy, r, c))
         self.inventory_proxy.setSourceModel(model)
-        self.inventory_proxy.sort(1, Qt.AscendingOrder)
-        self.inventory_table.resizeColumnsToContents()
-        self.progress_bar.setVisible(False)
-
-        self.inventory_table.selectionModel().selectionChanged.connect(
-            lambda *_: self.sync_selection_to_checkboxes(
-                self.inventory_table,
-                self.inventory_proxy,
-            )
-        )
-
+        self.inventory_table.setSelectionMode(QTableView.ExtendedSelection)
+        self.inventory_table.setSelectionBehavior(QTableView.SelectRows)
+        self.inventory_table.doubleClicked.connect(lambda: self.update_selected())
+        
+        h = self.inventory_table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.inventory_table.setColumnWidth(0, 40)
+        
+        # Dynamic flow: stretch Name, fit others to contents
+        for c in range(1, model.columnCount()):
+            col_name = model.headerData(c, Qt.Horizontal)
+            if col_name == "Name":
+                h.setSectionResizeMode(c, QHeaderView.Stretch)
+            else:
+                h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        
         self._stat_installed = len(data)
-        unknowns = sum(
-            1 for d in data
-            if str(d.get("Version", "")).lower()
-            in ("unknown", "???")
-        )
-        self._stat_unknown = unknowns
         self._last_scan_time = time.strftime("%H:%M:%S")
-        self.update_stats()
-        self.tabs.setTabText(
-            1, f"  System Inventory ({len(data)})  "
-        )
+        self.set_ui_busy("Scanning system inventory...", False, "inventory")
+        
+        self.set_ui_busy("Detective: Checking for updates...", True, "detective")
+        threading.Thread(target=self.detective_worker, args=(data,), daemon=True).start()
 
-        threading.Thread(
-            target=self.inventory_detective_worker,
-            args=(data,), daemon=True,
-        ).start()
-
-    def inventory_detective_worker(self, data):
-        self.logger.info(
-            "Detective: Checking for remote updates..."
-        )
+    def detective_worker(self, data):
         for i, item in enumerate(data):
             url = item.get("URL")
             if not url:
-                for k, fb in URL_FALLBACKS.items():
-                    if k in item["Name"].lower():
-                        url = fb
-                        break
-            if not url:
-                continue
-            if (
-                "github.com" in url
-                or "release" in url.lower()
-                or url in URL_FALLBACKS.values()
-            ):
-                self.logger.debug(
-                    f"Detective: {item['Name']} → {url}"
-                )
-                rv = check_remote_version(
-                    url,
-                    installed_version=item["Version"],
-                )
-                if rv:
-                    self.inventory_update_signal.emit(
-                        i, rv
-                    )
-        self.logger.info("Detective: Finished.")
+                for k, fb in ConfigManager().url_fallbacks.items():
+                    if k in item["Name"].lower(): url = fb; break
+            if url and ("github.com" in url or "release" in url.lower()):
+                rv = check_remote_version(url, item["Version"])
+                if rv: self.inventory_update_signal.emit(i, rv)
+        self.detective_finished.emit()
 
     @Slot(int, str)
     def apply_inventory_version(self, index, version):
@@ -798,298 +603,226 @@ class MainWindow(QMainWindow):
             item = model._data[index]
             item["Available"] = version
             model.layoutChanged.emit()
-            self.logger.info(
-                f"  ✓ {item['Name']}: {version}"
-            )
-            self.add_detected_update_to_updates_tab(item)
+            self.inventory_table.resizeColumnsToContents()
+            self.add_detected_update(item)
 
-    def add_detected_update_to_updates_tab(
-        self, inv_item,
-    ):
+    def add_detected_update(self, item):
         um = self.proxy_model.sourceModel()
-        if um is None:
+        if not um:
             um = UpdateModel([])
             self.proxy_model.setSourceModel(um)
-            self.table.selectionModel().selectionChanged.connect(
-                lambda *_: (
-                    self.sync_selection_to_checkboxes(
-                        self.table, self.proxy_model
-                    )
-                )
-            )
-        name_l = inv_item.get("Name", "").lower()
-        iid = inv_item.get("Id", "")
+            um.check_toggled.connect(lambda r, c: self.handle_native_checkbox(self.table, self.proxy_model, r, c))
+
+        # Check for duplicates
         for ex in um._data:
-            if (
-                ex.get("Name", "").lower() == name_l
-                or ex.get("Id", "") == iid
-            ):
-                ex["Available"] = inv_item.get(
-                    "Available", ""
-                )
+            if ex.get("Id") == item.get("Id") or ex.get("Name") == item.get("Name"):
+                ex["Available"] = item.get("Available")
                 um.layoutChanged.emit()
                 return
-        ui = {
-            "Name": inv_item.get("Name", ""),
-            "Id": inv_item.get("Id", ""),
-            "Version": inv_item.get("Version", ""),
-            "Available": inv_item.get("Available", ""),
-        }
-        ni = len(um._data)
-        um._data.append(ui)
-        um._selected[ni] = False
+
+        um._data.append({"Name": item["Name"], "Id": item.get("Id", ""), "Version": item["Version"], "Available": item.get("Available", "")})
+        # When adding a new item, its checkbox should be unchecked by default
+        um._selected[item.get("Id") or item.get("Name")] = False
         um.layoutChanged.emit()
+        self.table.resizeColumnsToContents()
         self._stat_updates = len(um._data)
         self.update_stats()
-        self.tabs.setTabText(
-            0,
-            f"  Updates Available ({len(um._data)})  ",
-        )
-        self.table.resizeColumnsToContents()
-
-    # ── Update Execution ────────────────────────────
 
     def update_selected(self):
-        if self.process.state() != QProcess.NotRunning:
-            self.logger.warning("Already in progress.")
-            return
-        proxy = (
-            self.proxy_model
-            if self.tabs.currentIndex() == 0
-            else self.inventory_proxy
-        )
+        proxy = self.proxy_model if self.sidebar.currentRow() == 0 else self.inventory_proxy
+        table = self.table if self.sidebar.currentRow() == 0 else self.inventory_table
         model = proxy.sourceModel()
-        if not model:
-            return
+        if not model: return
         ids = model.get_selected_ids()
         if not ids:
-            self.logger.warning("Select items first.")
-            return
-        self.current_operation = "update"
-        self.logger.info(f"Updating {len(ids)} apps...")
-        self.progress_bar.setVisible(True)
-        self._queue_total = len(ids)
-        self.progress_bar.setRange(0, self._queue_total)
-        self.progress_bar.setValue(0)
-        self.process_queue = deque(ids)
-        self.run_next_update()
+            # If no checkboxes are selected, fall back to table selection
+            sel = proxy.mapSelectionToSource(table.selectionModel().selection()).indexes()
+            ids = list(set(model._data[idx.row()].get("Id") or model._data[idx.row()].get("Name") for idx in sel if idx.row() < len(model._data)))
+        if ids: self.batch_update(ids)
+
+    def batch_update(self, ids):
+        with self._operation_lock:
+            if self.process.state() != QProcess.NotRunning: return
+            self.set_ui_busy("Updating apps...", True, "update")
+            self.current_operation = "update"
+            
+            # Prevent truncation during update status reads
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("COLUMNS", "300")
+            self.process.setProcessEnvironment(env)
+            
+            self._queue_total = len(ids)
+            self.process_queue = deque(ids)
+            self.run_next_update()
 
     def update_all(self):
-        if self.process.state() != QProcess.NotRunning:
-            self.logger.warning("Already in progress.")
-            return
         model = self.proxy_model.sourceModel()
-        if not model or model._is_inventory:
-            self.logger.warning(
-                "Refresh updates first."
-            )
-            return
-        ids = model.get_all_ids()
-        if not ids:
-            self.logger.info("No updates available.")
-            return
-        self.current_operation = "update"
-        self.logger.info(f"Updating all {len(ids)}...")
-        self.progress_bar.setVisible(True)
-        self._queue_total = len(ids)
-        self.progress_bar.setRange(0, self._queue_total)
-        self.progress_bar.setValue(0)
-        self.process_queue = deque(ids)
-        self.run_next_update()
+        if model: self.batch_update(model.get_all_ids())
 
     def run_next_update(self):
-        while (
-            hasattr(self, "process_queue")
-            and self.process_queue
-        ):
-            app_id = self.process_queue.popleft()
-            if app_id.startswith("Portable."):
-                self.logger.warning(
-                    f"Skip: {app_id} (manual)"
-                )
-                self.progress_bar.setValue(
-                    min(
-                        self.progress_bar.value() + 1,
-                        self._queue_total,
-                    )
-                )
-                continue
+        if hasattr(self, "process_queue") and self.process_queue:
+            self.current_updating_id = self.process_queue.popleft()
+            app_id = self.current_updating_id
             self.logger.info(f"Updating {app_id}...")
+            
             try:
                 cmd = self.executor.get_update_cmd(app_id)
-            except ValueError as e:
-                self.logger.error(f"Bad ID: {e}")
-                continue
-            self.process.start(cmd[0], cmd[1:])
-            self.start_process_watchdog()
-            return
-        self.logger.info("Batch update complete.")
-        self.progress_bar.setVisible(False)
+                self.process.start(cmd[0], cmd[1:])
+                self.start_process_watchdog(timeout=600)
+                self.activity_progress.setText(f"({self._queue_total - len(self.process_queue)} / {self._queue_total})")
+            except Exception as e:
+                self.logger.error(f"Failed to start update for {app_id}: {e}")
+                # Skip this one and move to next
+                QTimer.singleShot(100, self.run_next_update)
+        else:
+            self.set_ui_busy("Update complete.", False, "update")
 
-    # ── Process I/O ─────────────────────────────────
+    def remove_id_from_model(self, app_id):
+        """Surgically remove an item from the updates list."""
+        model = self.proxy_model.sourceModel()
+        if not model: return
+        
+        # Normalize comparison ID
+        target_id = str(app_id).strip().lower()
+        
+        for i, item in enumerate(model._data):
+            current_id = (item.get("Id") or item.get("Name")).strip().lower()
+            if current_id == target_id:
+                model.beginRemoveRows(QModelIndex(), i, i)
+                model._data.pop(i)
+                # Remove from selection state too
+                original_key = item.get("Id") or item.get("Name")
+                if original_key in model._selected:
+                    del model._selected[original_key]
+                model.endRemoveRows()
+                self._stat_updates = len(model._data)
+                self.update_stats()
+                break
 
     def handle_stdout(self):
-        raw = (
-            self.process.readAllStandardOutput()
-            .data().decode(errors="replace")
-        )
-        if len(self.full_output) < self._max_output_bytes:
+        try:
+            raw = self.process.readAllStandardOutput().data().decode(errors="replace")
             self.full_output += raw
-        self.append_log(raw.strip())
-        self._process_last_output = time.monotonic()
-        m = re.search(r"(\d+)%", raw)
-        if m:
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(int(m.group(1)))
+            clean = re.sub(r'[\r\b\x08]', '', raw.strip())
+            if clean:
+                self.append_log(clean)
+                # Update progress bar if percentage found
+                m = re.search(r"(\d+)%", clean)
+                if m: self.progress_bar.setValue(int(m.group(1)))
+        except Exception as e:
+            self.logger.debug(f"Error handling stdout: {e}")
 
     def handle_stderr(self):
-        raw = (
-            self.process.readAllStandardError()
-            .data().decode(errors="replace")
-        )
-        self._process_last_output = time.monotonic()
-        self.logger.error(f"CLI: {raw.strip()}")
+        try:
+            raw = self.process.readAllStandardError().data().decode(errors="replace")
+            if raw:
+                self.logger.error(f"CLI Error: {raw.strip()}")
+        except Exception as e:
+            self.logger.debug(f"Error handling stderr: {e}")
 
     def handle_process_error(self, error):
-        self.logger.error(f"Process error: {error}")
-        self.progress_bar.setVisible(False)
+        self.logger.error(f"Process error occurred: {error}")
 
-    def process_finished(self, exit_code, exit_status):
-        if self.process_timeout_timer.isActive():
-            self.process_timeout_timer.stop()
+    def process_finished(self, code, status):
+        self.process_timeout_timer.stop()
+        
+        # Reset progress bar for next operation
+        self.progress_bar.setValue(0)
+        
         if self.current_operation == "refresh":
-            self.logger.info("Parsing results...")
-            threading.Thread(
-                target=self.background_parse_winget,
-                args=(self.full_output,), daemon=True,
-            ).start()
-        elif self.current_operation == "investigate":
-            self.process_investigation_result()
+            threading.Thread(target=self._background_parse_winget, args=(self.full_output,), daemon=True).start()
         elif self.current_operation == "update":
-            if self._process_timed_out:
-                self.logger.warning("Timed out, next...")
-                self._process_timed_out = False
-            if hasattr(self, "process_queue"):
-                done = (
-                    self._queue_total
-                    - len(self.process_queue)
-                )
-                self.progress_bar.setValue(
-                    max(0, min(done, self._queue_total))
-                )
-            if (
-                hasattr(self, "process_queue")
-                and self.process_queue
-            ):
-                self.run_next_update()
+            if code == 0 and hasattr(self, "current_updating_id"):
+                self.remove_id_from_model(self.current_updating_id)
             else:
-                self.logger.info("Update complete.")
-                self.progress_bar.setVisible(False)
-        else:
-            self.progress_bar.setVisible(False)
+                msg = f"Update failed for {getattr(self, 'current_updating_id', 'unknown')} (Exit code: {code})"
+                self.logger.warning(msg)
+                self.append_log(f"\n[!] {msg}")
+                
+            if self.process_queue: 
+                # Small delay before next to allow OS to release locks
+                QTimer.singleShot(500, self.run_next_update)
+            else: 
+                self.set_ui_busy("Update complete.", False, "update")
 
-    def background_parse_winget(self, output):
+    def _background_parse_winget(self, output):
         with self._reg_data_lock:
-            if not self._cached_reg_data:
-                self._cached_reg_data = (
-                    get_registry_data()
-                )
+            if not self._cached_reg_data: self._cached_reg_data = get_registry_data()
             rd = self._cached_reg_data
         data = parse_winget_upgrade(output, reg_data=rd)
         self.winget_data_ready.emit(data)
 
     @Slot(list)
     def apply_winget_results(self, data):
-        self.proxy_model.setSourceModel(UpdateModel(data))
-        self.proxy_model.sort(1, Qt.AscendingOrder)
-        self.table.resizeColumnsToContents()
-        self.table.selectionModel().selectionChanged.connect(
-            lambda *_: self.sync_selection_to_checkboxes(
-                self.table, self.proxy_model
-            )
-        )
+        model = UpdateModel(data)
+        model.check_toggled.connect(lambda r, c: self.handle_native_checkbox(self.table, self.proxy_model, r, c))
+        self.proxy_model.setSourceModel(model)
+        self.table.setSelectionMode(QTableView.ExtendedSelection)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+        self.table.doubleClicked.connect(lambda: self.update_selected())
+        
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 40)
+        
+        # Dynamic flow: stretch Name, fit others to contents
+        for c in range(1, model.columnCount()):
+            col_name = model.headerData(c, Qt.Horizontal)
+            if col_name == "Name":
+                h.setSectionResizeMode(c, QHeaderView.Stretch)
+            else:
+                h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+            
         self._stat_updates = len(data)
         self._last_scan_time = time.strftime("%H:%M:%S")
-        self.update_stats()
-        self.tabs.setTabText(
-            0, f"  Updates Available ({len(data)})  "
-        )
-        self.logger.info(f"Found {len(data)} updates.")
-        self.investigate_unknowns(data)
+        self.set_ui_busy("Scanning for updates...", False, "refresh")
 
-    # ── Unknown Investigation ───────────────────────
-
-    def investigate_unknowns(self, data):
-        self.unknown_queue = deque(
-            item for item in data
-            if item["Version"].lower() == "unknown"
-        )
-        if self.unknown_queue:
-            self.logger.info(
-                f"Probing {len(self.unknown_queue)} "
-                f"unknown versions..."
-            )
-            self.current_operation = "investigate"
-            self.progress_bar.setVisible(True)
-            self.progress_bar.setRange(
-                0, len(self.unknown_queue)
-            )
-            self.progress_bar.setValue(0)
-            self.run_next_investigation()
-        else:
-            self.progress_bar.setVisible(False)
-
-    def run_next_investigation(self):
-        if self.unknown_queue:
-            self.full_output = ""
-            self.process.start(
-                "winget",
-                ["show", self.unknown_queue[0]["Id"]],
-            )
-            self.start_process_watchdog()
-        else:
-            self.current_operation = None
-            self.progress_bar.setVisible(False)
-
-    def start_process_watchdog(self):
+    def start_process_watchdog(self, timeout=180):
+        self.process_timeout_secs = timeout
         self._process_last_output = time.monotonic()
-        self._process_timed_out = False
-        if not self.process_timeout_timer.isActive():
-            self.process_timeout_timer.start()
+        self.process_timeout_timer.start()
 
     def check_process_timeout(self):
-        if (
-            self.process.state() == QProcess.NotRunning
-            or self._process_last_output is None
-        ):
-            return
-        if (
-            time.monotonic() - self._process_last_output
-            > self.process_timeout_secs
-        ):
-            self._process_timed_out = True
-            self.logger.warning(
-                "No output; killing hung process."
-            )
+        if self.process.state() == QProcess.NotRunning: return
+        if time.monotonic() - (self._process_last_output or 0) > self.process_timeout_secs:
+            self.logger.warning("Process hung; killing.")
             self.process.kill()
 
-    def process_investigation_result(self):
-        if not self.unknown_queue:
-            return
-        item = self.unknown_queue.popleft()
-        v = parse_winget_show_version(self.full_output)
-        if v:
-            model = self.proxy_model.sourceModel()
-            for d in model._data:
-                if d["Id"] == item["Id"]:
-                    d["Version"] = v
-                    break
-            model.layoutChanged.emit()
-            self._stat_unknown = max(
-                0, self._stat_unknown - 1
-            )
-            self.update_stats()
-        self.progress_bar.setValue(
-            self.progress_bar.value() + 1
-        )
-        self.run_next_investigation()
+    def update_github_api_status(self):
+        def worker():
+            try:
+                headers = {
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Cache-Control': 'no-cache'
+                }
+                pat = ConfigManager().github_pat
+                if pat:
+                    headers['Authorization'] = f"Bearer {pat}"
+                    self.logger.debug("Rate limit check: using PAT")
+                else:
+                    self.logger.debug("Rate limit check: no PAT")
+                    
+                resp = requests.get("https://api.github.com/rate_limit", headers=headers, timeout=5)
+                self.logger.debug(f"API Rate Limit Status: {resp.status_code}")
+                if resp.status_code == 200:
+                    self.rate_limit_signal.emit(resp.json())
+                elif resp.status_code == 401:
+                    self.log_signal.emit("GitHub API: Unauthorized (Check your PAT)")
+                else:
+                    self.log_signal.emit(f"GitHub API: Error {resp.status_code}")
+            except Exception as e:
+                self.logger.debug(f"API Check failed: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(dict)
+    def display_rate_limit(self, data):
+        core = data.get("resources", {}).get("core", {})
+        rem, lim = core.get("remaining", 0), core.get("limit", 0)
+        self.api_status_lbl.setText(f"REMAINING: {rem} / {lim}")
+        self.api_reset_lbl.setText(f"Resets at {time.strftime('%H:%M:%S', time.localtime(core.get('reset', 0)))}")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())

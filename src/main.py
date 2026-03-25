@@ -3,10 +3,32 @@ import os
 import logging
 from PySide6.QtWidgets import QApplication
 from src.ui.main_window import MainWindow
+from src.logic.config import CONFIG_DIR
 
 def main():
-    # Setup base logging
-    logging.basicConfig(level=logging.DEBUG)
+    # Setup base logging to both terminal and a persistent file in the project root
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_file = os.path.join(project_root, "winget_gui.log")
+    
+    from logging.handlers import RotatingFileHandler
+    
+    # Mode 'a' for append, with rotation to keep it under control
+    handler = RotatingFileHandler(
+        log_file, 
+        maxBytes=10*1024*1024, # 10MB
+        backupCount=3,
+        encoding="utf-8"
+    )
+    
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            handler,
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+
     logger = logging.getLogger(__name__)
     logger.info("Starting WingetGui...")
 

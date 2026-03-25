@@ -28,5 +28,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Conductor state (machine-specific)
+# Conductor state
 conductor/setup_state.json
+
+# Local logs
+*.log

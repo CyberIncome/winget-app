@@ -80,32 +80,48 @@ QLineEdit#searchBar:focus {
     border-color: #58a6ff;
 }
 
-/* --- Tabs --- */
-QTabWidget::pane {
-    border: 1px solid #30363d;
-    border-top: none;
-    background-color: #0d1117;
-}
-
-QTabBar::tab {
+/* --- Sidebar Navigation --- */
+QListWidget#sidebar {
     background-color: transparent;
-    color: #8b949e;
-    padding: 10px 24px;
     border: none;
-    border-bottom: 2px solid transparent;
+    border-right: 1px solid #30363d;
+    outline: none;
+    padding-top: 10px;
+}
+
+QListWidget#sidebar::item {
+    padding: 10px 16px;
+    margin: 4px 12px;
+    border-radius: 6px;
+    color: #8b949e;
     font-weight: 600;
-    font-size: 10pt;
-    margin-right: 4px;
 }
 
-QTabBar::tab:selected {
-    color: #e6edf3;
-    border-bottom: 2px solid #58a6ff;
-}
-
-QTabBar::tab:hover:!selected {
+QListWidget#sidebar::item:hover {
+    background-color: #1f2428;
     color: #c9d1d9;
-    border-bottom: 2px solid #30363d;
+}
+
+QListWidget#sidebar::item:selected {
+    background-color: rgba(56, 139, 253, 0.15);
+    color: #e6edf3;
+}
+
+/* --- Splitter & Detail Pane --- */
+QSplitter::handle {
+    background-color: #30363d;
+    margin: 4px 8px;
+    width: 2px;
+}
+
+QPlainTextEdit#detailsPane {
+    background-color: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 12px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 10pt;
+    color: #c9d1d9;
 }
 
 /* --- Tables --- */
@@ -285,18 +301,54 @@ QStatusBar QLabel {
     margin: 0;
 }
 
-/* --- Checkboxes --- */
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
+/* --- Integrated Activity Indicator --- */
+QWidget#activityBanner {
+    background-color: transparent;
+    border: none;
+    max-height: 24px;
+}
+
+QLabel#activityStatus {
+    font-size: 8.5pt;
+    font-weight: 700;
+    color: #58a6ff;
+    text-transform: uppercase;
+}
+
+QLabel#activityProgress {
+    font-size: 8pt;
+    font-weight: 600;
+    color: #8b949e;
+}
+
+/* --- Admin Warning --- */
+QLabel#adminWarning {
+    background-color: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    border: 1px solid #d29922;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 8pt;
+    font-weight: bold;
+}
+
+
+/* --- Checkboxes in Table --- */
+QTableView::indicator {
+    width: 15px;
+    height: 15px;
     border: 1px solid #30363d;
     border-radius: 3px;
     background-color: #0d1117;
 }
 
-QCheckBox::indicator:checked {
-    background-color: #238636;
+QTableView::indicator:checked {
+    background-color: #2ea043;
     border-color: #2ea043;
+}
+
+QTableView::indicator:hover {
+    border-color: #8b949e;
 }
 
 /* --- Context Menu --- */

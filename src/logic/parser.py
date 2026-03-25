@@ -8,6 +8,8 @@ import win32com.client
 import pythoncom
 import requests
 
+from src.logic.config import ConfigManager
+
 # Set up logging for this module
 logger = logging.getLogger(__name__)
 
@@ -16,10 +18,8 @@ MAX_REGISTRY_VALUE_LEN = 512
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024  # 2 MB
 ALLOWED_URL_SCHEMES = ('https://',)
 
-# Fallback URLs for apps whose registry entries lack HelpLink
-URL_FALLBACKS = {
-    "gimp": "https://www.gimp.org/downloads/",
-}
+# Removed hardcoded URL_FALLBACKS; it's now in ConfigManager
+# To get it: ConfigManager().url_fallbacks
 
 # EXEs to never trust for application versioning
 EXE_BLACKLIST = [
@@ -685,32 +685,18 @@ def get_total_inventory(reg_data=None):
 
 
 def parse_version_tuple(version_str):
-    """Parse a version string into a tuple of integers."""
+    """Parse a version string into a tuple of integers, ignoring noise."""
     if not version_str:
         return None
-    version_str = version_str.lstrip('vV').strip()
+    # Extract only the sequence of numbers and dots
+    match = re.search(r'(\d+(?:\.\d+)+|\d+)', str(version_str))
+    if not match:
+        return None
     try:
-        parts = [int(p) for p in version_str.split('.')]
+        parts = [int(p) for p in match.group(1).split('.')]
         return tuple(parts)
     except (ValueError, AttributeError):
         return None
-
-
-def is_valid_version(version_str):
-    """Check if a version string looks like a real version."""
-    if not version_str:
-        return False
-    parts = version_str.split('.')
-    if len(parts) > 4:
-        return False
-    try:
-        for part in parts:
-            num = int(part)
-            if num > 9999:
-                return False
-    except ValueError:
-        return False
-    return True
 
 
 def is_version_newer(remote_v, installed_v):
@@ -754,6 +740,22 @@ def is_version_newer(remote_v, installed_v):
 
 
 # --- HTTP safety helpers (C2 fix) ---
+
+def is_valid_version(v: str) -> bool:
+    """Check if a string looks like a valid version number."""
+    if not v or len(v) > 20: return False
+    if not any(c.isdigit() for c in v): return False
+    # Avoid strings that are just dates or long integers without separators
+    if v.count('.') == 0 and len(v) > 4: return False
+    parts = v.split('.')
+    if len(parts) > 4: return False
+    # Avoid thousands-separated numbers (e.g., 2.345 stars) in generic text
+    # Heuristic: segments > 9999 are rarely version numbers unless it's a date/build 
+    # but even then, multiple such segments or huge minor jumps are red flags.
+    for p in parts:
+        if p.isdigit() and int(p) > 9999: return False
+    return True
+
 
 def _is_safe_url(url):
     """Validate URL scheme is HTTPS-only."""
@@ -823,14 +825,16 @@ def check_remote_version(url, installed_version=None):
                     logger.debug(
                         f"Trying GitHub API: {api_url}"
                     )
-                    api_resp = _safe_get(
-                        api_url,
-                        headers={
-                            'Accept':
-                            'application/vnd.github'
-                            '.v3+json'
-                        },
-                    )
+                    headers = {
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                    
+                    # Attach PAT if available
+                    pat = ConfigManager().github_pat
+                    if pat:
+                        headers['Authorization'] = f"Bearer {pat}"
+
+                    api_resp = _safe_get(api_url, headers=headers)
                     if api_resp is None:
                         pass  # Size limit hit
                     elif api_resp.status_code == 403:
@@ -843,6 +847,7 @@ def check_remote_version(url, installed_version=None):
                         logger.warning(
                             f"GitHub API rate limited "
                             f"(remaining: {remaining}). "
+                            f"Missing or invalid PAT? "
                             f"Skipping API checks."
                         )
                     elif api_resp.status_code == 200:
@@ -876,6 +881,7 @@ def check_remote_version(url, installed_version=None):
                                     f"than "
                                     f"{installed_version}"
                                 )
+                                return None # Up to date
                 except Exception as e:
                     logger.debug(
                         f"GitHub API failed: {e}"
@@ -927,11 +933,25 @@ def check_remote_version(url, installed_version=None):
                         "No tag in URL, searching page..."
                     )
                     versions = re.findall(
-                        r'[vV]?(\d+\.\d+(?:\.\d+){0,2})\b',
+                        r'[vV]?(\d+\.\d+(?:\.\d+)*)\b',
                         response.text,
                     )
+                    installed_tuple = parse_version_tuple(installed_version)
                     for v in versions:
-                        if is_valid_version(v):
+                        v_tuple = parse_version_tuple(v)
+                        if v_tuple and is_valid_version(v):
+                            # Heuristic: Avoid extreme major version jumps in scraped text (likely noise)
+                            if installed_tuple and v_tuple[0] > installed_tuple[0] + 5:
+                                logger.debug(f"Ignoring suspicious major jump: {v}")
+                                continue
+                            
+                            # Heuristic: If major matches, avoid extreme minor jumps (e.g., from .10 to .837)
+                            # Normal apps don't jump > 100 minor versions at once.
+                            if installed_tuple and len(installed_tuple) > 1 and len(v_tuple) > 1:
+                                if v_tuple[0] == installed_tuple[0] and v_tuple[1] > installed_tuple[1] + 100:
+                                    logger.debug(f"Ignoring suspicious minor jump: {v}")
+                                    continue
+                                
                             if (
                                 installed_version is None
                                 or is_version_newer(
