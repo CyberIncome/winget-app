@@ -344,8 +344,9 @@ class MainWindow(QMainWindow):
             url = item.get("URL")
             if "gimp" in item["Name"].lower() and not url: url = "https://www.gimp.org/downloads/"
             if url and ("github.com" in url or "release" in url.lower() or "gimp.org" in url):
-                remote_v = check_remote_version(url)
-                if remote_v and remote_v != item["Version"]:
+                self.logger.debug(f"Detective: Probing {item['Name']} at {url}")
+                remote_v = check_remote_version(url, installed_version=item["Version"])
+                if remote_v:
                     self.inventory_update_signal.emit(i, remote_v)
         self.logger.info("Detective: Background check finished.")
 
@@ -353,9 +354,53 @@ class MainWindow(QMainWindow):
     def apply_inventory_version(self, index, version):
         model = self.inventory_proxy.sourceModel()
         if model and index < len(model._data):
-            model._data[index]["Available"] = version
+            item = model._data[index]
+            item["Available"] = version
             model.layoutChanged.emit()
-            self.logger.info(f"  [HIT] {model._data[index]['Name']}: new version {version}")
+            self.logger.info(f"  [HIT] {item['Name']}: new version {version}")
+            
+            # Promote to Updates tab so user can see and act on this update
+            self.add_detected_update_to_updates_tab(item)
+
+    def add_detected_update_to_updates_tab(self, inventory_item):
+        """Adds an item from the inventory detective to the Updates Available tab."""
+        updates_model = self.proxy_model.sourceModel()
+        
+        # If no updates model exists yet, create one
+        if updates_model is None:
+            updates_model = UpdateModel([])
+            self.proxy_model.setSourceModel(updates_model)
+            self.table.selectionModel().selectionChanged.connect(
+                lambda *_: self.sync_selection_to_checkboxes(self.table, self.proxy_model)
+            )
+        
+        # Check if item already exists in updates list (avoid duplicates)
+        item_name = inventory_item.get("Name", "").lower()
+        item_id = inventory_item.get("Id", "")
+        for existing in updates_model._data:
+            if existing.get("Name", "").lower() == item_name or existing.get("Id", "") == item_id:
+                # Update the Available version if it's newer
+                existing["Available"] = inventory_item.get("Available", "")
+                updates_model.layoutChanged.emit()
+                return
+        
+        # Convert inventory item format to updates format
+        update_item = {
+            "Name": inventory_item.get("Name", ""),
+            "Id": inventory_item.get("Id", ""),
+            "Version": inventory_item.get("Version", ""),
+            "Available": inventory_item.get("Available", "")
+        }
+        
+        # Add to the updates model
+        new_index = len(updates_model._data)
+        updates_model._data.append(update_item)
+        updates_model._selected[new_index] = False
+        updates_model.layoutChanged.emit()
+        
+        # Update the tab title to reflect new count
+        self.tabs.setTabText(0, f"Updates Available ({len(updates_model._data)})")
+        self.table.resizeColumnsToContents()
 
     def update_selected(self):
         if self.process.state() != QProcess.NotRunning:

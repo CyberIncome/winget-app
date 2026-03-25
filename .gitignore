@@ -1,2 +1,32 @@
-/venv
-__pycache__/
+# Virtual environment
+/venv/
+
+# Python bytecode
+src/logic/__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+
+# PyInstaller build artifacts
+/build/
+/dist/
+*.spec
+
+# Test / coverage caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Conductor state (machine-specific)
+conductor/setup_state.json

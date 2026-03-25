@@ -270,10 +270,19 @@ def parse_winget_upgrade(output, reg_data=None):
         row = {"Name": line[indices[0]:indices[1]].strip(), "Id": line[indices[1]:indices[2]].strip(),
                "Version": line[indices[2]:indices[3]].strip(), "Available": line[indices[3]:indices[4]].strip()}
         if row["Name"] and row["Id"]:
+            logger.debug(f"Winget parsed row: {row}")
             if row["Version"].lower() == "unknown":
                 v = find_version_in_registry(row["Name"], row["Id"], reg_data)
                 if not v: v = extract_version_from_text(row["Name"])
                 if v: row["Version"] = v
+            
+            # Filter out updates that are not actually newer (fixes MEGAsync 6.1.1.0 vs 6.0.0.3 issue)
+            # Only filter if we have a valid installed version to compare against
+            if row["Version"].lower() != "unknown" and row["Available"]:
+                 if not is_version_newer(row["Available"], row["Version"]):
+                     logger.warning(f"Skipping Winget update for {row['Name']}: {row['Available']} is not newer than {row['Version']}")
+                     continue
+
             results.append(row)
     results.sort(key=lambda x: (x["Version"].lower() != "unknown", x["Name"].lower()))
     return results
@@ -313,14 +322,133 @@ def get_total_inventory(reg_data=None):
     logger.info(f"Parser: Total System Inventory complete. Count: {len(inventory)}")
     return inventory
 
-def check_remote_version(url):
-    """Simple scraper to find a version number."""
+def parse_version_tuple(version_str):
+    """Parse a version string into a tuple of integers for comparison."""
+    if not version_str:
+        return None
+    # Remove leading 'v' or 'V'
+    version_str = version_str.lstrip('vV').strip()
     try:
+        parts = [int(p) for p in version_str.split('.')]
+        return tuple(parts)
+    except (ValueError, AttributeError):
+        return None
+
+def is_valid_version(version_str):
+    """Check if a version string looks like a real software version."""
+    if not version_str:
+        return False
+    parts = version_str.split('.')
+    # Reject if too many parts (more than 4 like x.y.z.w)
+    if len(parts) > 4:
+        return False
+    # Reject if any part is unreasonably large (likely a timestamp/ID)
+    try:
+        for part in parts:
+            num = int(part)
+            if num > 9999:  # No legitimate version part should be this large
+                return False
+    except ValueError:
+        return False
+    return True
+
+def is_version_newer(remote_v, installed_v):
+    """Compare two version strings. Returns True if remote is newer than installed."""
+    remote = parse_version_tuple(remote_v)
+    installed = parse_version_tuple(installed_v)
+    
+    if not remote or not installed:
+        logger.debug(f"Version comparison failed to parse: remote='{remote_v}' -> {remote}, installed='{installed_v}' -> {installed}")
+        return False
+    
+    # Pad shorter tuple with zeros for comparison
+    max_len = max(len(remote), len(installed))
+    remote_padded = remote + (0,) * (max_len - len(remote))
+    installed_padded = installed + (0,) * (max_len - len(installed))
+    
+    is_newer = remote_padded > installed_padded
+    if is_newer:
+        logger.debug(f"Version comparison: {remote_v} ({remote_padded}) > {installed_v} ({installed_padded}) [NEWER]")
+    else:
+        logger.debug(f"Version comparison: {remote_v} ({remote_padded}) <= {installed_v} ({installed_padded}) [NOT NEWER]")
+    
+    return is_newer
+
+def check_remote_version(url, installed_version=None):
+    """Smart scraper to find the latest version number."""
+    logger.debug(f"Checking remote version for URL: {url} (Installed: {installed_version})")
+    try:
+        # For GitHub URLs, use the releases/latest endpoint which is more reliable
+        if "github.com" in url:
+            # Extract owner/repo from various GitHub URL patterns
+            match = re.search(r'github\.com/([^/]+)/([^/]+)', url)
+            if match:
+                owner, repo = match.groups()
+                repo = repo.split('?')[0].rstrip('/')  # Clean up repo name
+                
+                # Try GitHub API first (most reliable)
+                api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+                try:
+                    logger.debug(f"Trying GitHub API: {api_url}")
+                    api_response = requests.get(api_url, timeout=5, headers={'Accept': 'application/vnd.github.v3+json'})
+                    if api_response.status_code == 200:
+                        data = api_response.json()
+                        tag = data.get('tag_name', '')
+                        version = tag.lstrip('vV')
+                        logger.debug(f"GitHub API returned tag: {tag} -> Parsed: {version}")
+                        if version and is_valid_version(version):
+                            if installed_version is None or is_version_newer(version, installed_version):
+                                logger.info(f"Using version from GitHub API: {version}")
+                                return version
+                            else:
+                                logger.debug(f"GitHub API version {version} is not newer than installed {installed_version}")
+                except Exception as e:
+                    logger.debug(f"GitHub API failed: {e}")
+                
+                # Fallback: Use releases/latest page (redirects to latest release)
+                releases_url = f"https://github.com/{owner}/{repo}/releases/latest"
+                logger.debug(f"Trying GitHub Releases Redirect: {releases_url}")
+                response = requests.get(releases_url, timeout=5, allow_redirects=True)
+                if response.status_code == 200:
+                    # The final URL contains the version tag
+                    if '/tag/' in response.url:
+                        tag = response.url.split('/tag/')[-1]
+                        version = tag.lstrip('vV')
+                        logger.debug(f"GitHub Redirect URL contains tag: {tag} -> Parsed: {version}")
+                        if is_valid_version(version):
+                            if installed_version is None or is_version_newer(version, installed_version):
+                                logger.info(f"Using version from GitHub URL tag: {version}")
+                                return version
+                            logger.debug(f"GitHub URL tag version {version} is not newer than {installed_version}")
+                            return None  # We found the latest version and it's not newer, so stop.
+                    
+                    # Only if NO version found in URL, search in page content
+                    logger.debug("No tag in URL, searching page content...")
+                    versions = re.findall(r'[vV]?(\d+\.\d+(?:\.\d+){0,2})\b', response.text)
+                    for v in versions:
+                        if is_valid_version(v):
+                            if installed_version is None or is_version_newer(v, installed_version):
+                                logger.info(f"Found newer version in page text: {v}")
+                                return v
+                return None
+        
+        # For non-GitHub URLs, use improved scraping
+        logger.debug(f"Scraping generic URL: {url}")
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
-            versions = re.findall(r'[vV]?(\d+\.\d+(?:\.\d+)*)', response.text)
-            if versions: return versions[0]
-    except Exception: pass
+            # Find all version-like patterns, but filter them
+            versions = re.findall(r'[vV]?(\d+\.\d+(?:\.\d+){0,2})\b', response.text)
+            logger.debug(f"Found {len(versions)} potential version candidates in page text.")
+            for v in versions:
+                if is_valid_version(v):
+                    if installed_version is None or is_version_newer(v, installed_version):
+                        logger.info(f"Accepted version from page text: {v}")
+                        return v
+                    else:
+                        pass # too verbose to log every rejection
+            logger.debug("No valid newer versions found in page text.")
+    except Exception as e:
+        logger.debug(f"Error checking remote version: {e}")
     return None
 
 def parse_winget_show_version(output):
