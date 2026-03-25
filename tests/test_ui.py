@@ -39,4 +39,4 @@ def test_selection_logic():
 
 def test_main_window_title(qtbot):
     window = MainWindow()
-    assert window.windowTitle() == "WingetGui"
+    assert window.windowTitle() == "Winget Universal Dashboard"
