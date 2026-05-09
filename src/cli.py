@@ -72,6 +72,12 @@ def run_winget(args, timeout=300):
             "on your PATH?"
         )
         sys.exit(1)
+    except OSError as e:
+        logging.error(
+            "winget failed to start. Confirm App Installer is "
+            f"installed and the winget app execution alias works: {e}"
+        )
+        sys.exit(1)
 
 
 def print_table(rows, columns, widths=None):
@@ -328,6 +334,14 @@ def _run_update_live(cmd):
     except FileNotFoundError:
         click.secho(
             "Error: winget not found.", fg="red",
+        )
+        raise SystemExit(1)
+    except OSError as e:
+        click.secho(
+            "Error: winget failed to start. Confirm App "
+            "Installer is installed and the winget app execution "
+            f"alias works: {e}",
+            fg="red",
         )
         raise SystemExit(1)
 

@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 
 # Strict pattern for winget package IDs (C1 fix)
 _VALID_APP_ID_RE = re.compile(r'^[A-Za-z0-9._\-]+$')
+_VALID_PACKAGE_NAME_RE = re.compile(r'^[^\r\n\x00]+$')
 
 
 def validate_app_id(app_id):
@@ -18,6 +19,23 @@ def validate_app_id(app_id):
             f"Invalid app ID rejected: {app_id!r}"
         )
     return app_id
+
+
+def is_valid_app_id(app_id):
+    """Return whether a string is a safe winget package ID."""
+    return bool(app_id and _VALID_APP_ID_RE.match(str(app_id)))
+
+
+def validate_package_name(package_name):
+    """Validate package names passed as a single QProcess argument."""
+    if (
+        not package_name
+        or not _VALID_PACKAGE_NAME_RE.match(str(package_name))
+    ):
+        raise ValueError(
+            f"Invalid package name rejected: {package_name!r}"
+        )
+    return str(package_name).strip()
 
 
 class WingetExecutor:
@@ -37,12 +55,30 @@ class WingetExecutor:
         logger.debug(f"Generated command: {' '.join(cmd)}")
         return cmd
 
-    def get_update_cmd(self, app_id):
-        """Command to update a specific app by ID."""
-        app_id = validate_app_id(app_id)
-        cmd = ["winget", "upgrade", "--id", app_id] + self.base_args
+    def get_update_cmd(
+        self, package_ref, match_by="id", silent=True
+    ):
+        """Command to update a specific app by ID or name."""
+        if match_by == "id":
+            package_ref = validate_app_id(package_ref)
+            selector = "--id"
+            log_label = "ID"
+        elif match_by == "name":
+            package_ref = validate_package_name(package_ref)
+            selector = "--name"
+            log_label = "name"
+        else:
+            raise ValueError(f"Unsupported winget match field: {match_by!r}")
+
+        cmd = ["winget", "upgrade", selector, package_ref]
+        if silent:
+            cmd.append("--silent")
+        cmd += self.base_args[1:]
         logger.info(
-            f"Preparing update command for ID: {app_id}"
+            "Preparing update command for %s: %s (silent=%s)",
+            log_label,
+            package_ref,
+            silent,
         )
         return cmd
 

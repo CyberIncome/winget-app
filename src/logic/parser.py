@@ -467,7 +467,8 @@ def get_portable_apps():
 
 
 def find_version_in_registry(
-    winget_name, winget_id, registry_data
+    winget_name, winget_id, registry_data,
+    allow_fuzzy=True,
 ):
     """Scored heuristic matching with binary fallback."""
     w_name_norm = normalize(winget_name)
@@ -505,7 +506,7 @@ def find_version_in_registry(
             continue
         intersection = w_words.intersection(r_words)
         coverage = len(intersection) / len(r_words)
-        if coverage >= 0.9 and (
+        if allow_fuzzy and coverage >= 0.9 and (
             len(intersection) >= 2
             or (
                 len(intersection) == 1
@@ -578,19 +579,21 @@ def parse_winget_upgrade(output, reg_data=None):
         }
         if row["Name"] and row["Id"]:
             logger.debug(f"Winget parsed row: {row}")
-            if row["Version"].lower() == "unknown":
+            reported_version = row["Version"]
+            if reported_version.lower() == "unknown":
                 v = find_version_in_registry(
-                    row["Name"], row["Id"], reg_data
+                    row["Name"],
+                    row["Id"],
+                    reg_data,
+                    allow_fuzzy=False,
                 )
-                if not v:
-                    v = extract_version_from_text(
-                        row["Name"]
-                    )
                 if v:
                     row["Version"] = v
 
             if (
-                row["Version"].lower() != "unknown"
+                _should_compare_winget_versions(
+                    reported_version, row["Version"]
+                )
                 and row["Available"]
             ):
                 if not is_version_newer(
@@ -737,6 +740,25 @@ def is_version_newer(remote_v, installed_v):
             f"({installed_padded}) [NOT NEWER]"
         )
     return is_newer
+
+
+def _is_uncertain_version(version_str):
+    """Return whether a version string is approximate or unknown."""
+    if not version_str:
+        return True
+    version_text = str(version_str).strip().lower()
+    if version_text in {"unknown", "???"}:
+        return True
+    return any(token in version_text for token in ("<", ">", "~"))
+
+
+def _should_compare_winget_versions(
+    reported_version, displayed_version
+):
+    """Return whether local filtering is safe for a winget row."""
+    if _is_uncertain_version(reported_version):
+        return False
+    return parse_version_tuple(displayed_version) is not None
 
 
 # --- HTTP safety helpers (C2 fix) ---
@@ -928,41 +950,10 @@ def check_remote_version(url, installed_version=None):
                             )
                             return None
 
-                    # Search page content as last resort
                     logger.debug(
-                        "No tag in URL, searching page..."
+                        "GitHub latest-release URL did not resolve "
+                        "to a tag. Skipping page text scraping."
                     )
-                    versions = re.findall(
-                        r'[vV]?(\d+\.\d+(?:\.\d+)*)\b',
-                        response.text,
-                    )
-                    installed_tuple = parse_version_tuple(installed_version)
-                    for v in versions:
-                        v_tuple = parse_version_tuple(v)
-                        if v_tuple and is_valid_version(v):
-                            # Heuristic: Avoid extreme major version jumps in scraped text (likely noise)
-                            if installed_tuple and v_tuple[0] > installed_tuple[0] + 5:
-                                logger.debug(f"Ignoring suspicious major jump: {v}")
-                                continue
-                            
-                            # Heuristic: If major matches, avoid extreme minor jumps (e.g., from .10 to .837)
-                            # Normal apps don't jump > 100 minor versions at once.
-                            if installed_tuple and len(installed_tuple) > 1 and len(v_tuple) > 1:
-                                if v_tuple[0] == installed_tuple[0] and v_tuple[1] > installed_tuple[1] + 100:
-                                    logger.debug(f"Ignoring suspicious minor jump: {v}")
-                                    continue
-                                
-                            if (
-                                installed_version is None
-                                or is_version_newer(
-                                    v, installed_version
-                                )
-                            ):
-                                logger.info(
-                                    f"Found newer version "
-                                    f"in page text: {v}"
-                                )
-                                return v
                 return None
 
         # For non-GitHub URLs
@@ -997,6 +988,41 @@ def check_remote_version(url, installed_version=None):
             f"Error checking remote version: {e}"
         )
     return None
+
+
+def detect_remote_versions_batch(data, url_fallbacks):
+    """Return remote version hits for inventory items."""
+    results = []
+    for i, item in enumerate(data):
+        url = item.get("URL")
+        if not url:
+            item_name = str(item.get("Name", "")).lower()
+            for key, fallback in url_fallbacks.items():
+                if key in item_name:
+                    url = fallback
+                    break
+        if url and (
+            "github.com" in url
+            or "release" in url.lower()
+        ):
+            remote_version = check_remote_version(
+                url, item.get("Version")
+            )
+            if remote_version:
+                results.append((i, remote_version))
+    return results
+
+
+def detective_scan_worker(data, url_fallbacks, result_queue):
+    """Run remote version checks in an isolated process."""
+    try:
+        result_queue.put({
+            "results": detect_remote_versions_batch(
+                data, url_fallbacks
+            )
+        })
+    except Exception as exc:
+        result_queue.put({"error": str(exc)})
 
 
 def parse_winget_show_version(output):

@@ -1,0 +1,1 @@
+Error: 'charmap' codec can't encode character '\u2705' in position 193: character maps to <undefined>

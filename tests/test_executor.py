@@ -1,5 +1,9 @@
 import pytest
-from src.logic.executor import WingetExecutor, validate_app_id
+from src.logic.executor import (
+    WingetExecutor,
+    is_valid_app_id,
+    validate_app_id,
+)
 
 
 def test_generate_upgrade_command():
@@ -15,6 +19,31 @@ def test_generate_update_single_cmd():
     assert cmd == [
         "winget", "upgrade", "--id", "Google.Chrome",
         "--silent", "--accept-package-agreements",
+        "--accept-source-agreements",
+    ]
+
+
+def test_generate_update_by_name_cmd():
+    executor = WingetExecutor()
+    cmd = executor.get_update_cmd(
+        "Visual Studio Build Tools 2022", match_by="name"
+    )
+    assert cmd == [
+        "winget", "upgrade", "--name",
+        "Visual Studio Build Tools 2022",
+        "--silent", "--accept-package-agreements",
+        "--accept-source-agreements",
+    ]
+
+
+def test_generate_update_without_silent_cmd():
+    executor = WingetExecutor()
+    cmd = executor.get_update_cmd(
+        "Perplexity.Comet", silent=False
+    )
+    assert cmd == [
+        "winget", "upgrade", "--id", "Perplexity.Comet",
+        "--accept-package-agreements",
         "--accept-source-agreements",
     ]
 
@@ -36,6 +65,16 @@ def test_validate_app_id_valid():
     assert validate_app_id("Google.Chrome") == "Google.Chrome"
     assert validate_app_id("7zip.7zip") == "7zip.7zip"
     assert validate_app_id("App-Name_1.0") == "App-Name_1.0"
+
+
+def test_is_valid_app_id():
+    assert is_valid_app_id("Google.Chrome") is True
+    assert is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo...") is True
+    assert (
+        is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo\u2026")
+        is False
+    )
+    assert is_valid_app_id("Visual Studio Code") is False
 
 
 def test_validate_app_id_rejects_injection():

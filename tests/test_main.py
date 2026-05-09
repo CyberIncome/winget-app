@@ -9,7 +9,8 @@ def test_qss_exists():
     with open(qss_path, "r") as f:
         content = f.read()
         assert "QMainWindow" in content
-        assert "#0d1117" in content  # GitHub Dark bg
+        assert "#11131c" in content  # Slate glass background
+        assert "QLabel#statBadge" in content
 
 def test_main_initialization(qtbot):
     # This just ensures main() can run without crashing in a smoke test

@@ -1,11 +1,24 @@
 import pytest
 from src.logic.parser import (
+    check_remote_version,
     parse_winget_upgrade,
     is_version_newer,
     is_valid_version,
     parse_version_tuple,
     _is_safe_url,
 )
+
+
+class FakeResponse:
+    def __init__(self, status_code, url, text="", json_data=None):
+        self.status_code = status_code
+        self.url = url
+        self.text = text
+        self._json_data = json_data or {}
+        self.headers = {}
+
+    def json(self):
+        return self._json_data
 
 
 def test_parse_winget_upgrade_standard():
@@ -45,6 +58,79 @@ Some App                       Some.App                     unknown          1.2
     results = parse_winget_upgrade(sample_output)
     assert len(results) == 1
     assert results[0]["Version"] == "unknown"
+
+
+def test_parse_winget_upgrade_does_not_guess_from_name():
+    sample_output = """Name                           Id                           Version          Available        Source
+------------------------------------------------------------------------------------------------------
+App 4.1.36                     Some.App                     unknown          4.1.36           winget
+"""
+    results = parse_winget_upgrade(sample_output, reg_data=[])
+
+    assert len(results) == 1
+    assert results[0]["Version"] == "unknown"
+
+
+def test_parse_winget_upgrade_keeps_uncertain_winget_versions():
+    sample_output = """Name                           Id                           Version          Available        Source
+------------------------------------------------------------------------------------------------------
+MEGAsync                       Mega.MEGASync                < 6.3.0.1        6.3.0.1          winget
+"""
+    results = parse_winget_upgrade(sample_output, reg_data=[])
+
+    assert len(results) == 1
+    assert results[0]["Version"] == "< 6.3.0.1"
+
+
+def test_check_remote_version_github_skips_release_page_text(monkeypatch):
+    responses = {
+        "https://api.github.com/repos/GNOME/gimp/releases/latest":
+            FakeResponse(
+                404,
+                "https://api.github.com/repos/GNOME/gimp/releases/latest",
+            ),
+        "https://github.com/GNOME/gimp/releases/latest":
+            FakeResponse(
+                200,
+                "https://github.com/GNOME/gimp/releases",
+                "stars 4.835 watchers 10.303",
+            ),
+    }
+
+    def fake_safe_get(url, **kwargs):
+        return responses[url]
+
+    monkeypatch.setattr("src.logic.parser._safe_get", fake_safe_get)
+
+    assert check_remote_version(
+        "https://github.com/GNOME/gimp/releases",
+        installed_version="2.10.38",
+    ) is None
+
+
+def test_check_remote_version_github_accepts_latest_tag(monkeypatch):
+    responses = {
+        "https://api.github.com/repos/owner/repo/releases/latest":
+            FakeResponse(
+                404,
+                "https://api.github.com/repos/owner/repo/releases/latest",
+            ),
+        "https://github.com/owner/repo/releases/latest":
+            FakeResponse(
+                200,
+                "https://github.com/owner/repo/releases/tag/v2.0.1",
+            ),
+    }
+
+    def fake_safe_get(url, **kwargs):
+        return responses[url]
+
+    monkeypatch.setattr("src.logic.parser._safe_get", fake_safe_get)
+
+    assert check_remote_version(
+        "https://github.com/owner/repo",
+        installed_version="2.0.0",
+    ) == "2.0.1"
 
 
 # --- Version comparison tests (was 0% coverage) ---
