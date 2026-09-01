@@ -8,38 +8,77 @@ import shutil
 import subprocess
 
 from release_common import (
-    DIST_DIR,
+    CHECKSUMS_FILE,
+    CLI_EXE,
+    GUI_EXE,
+    HASHED_RELEASE_ASSETS,
     ROOT,
+    SETUP_EXE,
+    UPLOAD_RELEASE_ASSETS,
+    current_git_branch,
+    is_prerelease,
     read_version,
-    require_build_version,
+    require_build_identity,
+    require_clean_worktree,
     require_files,
+    require_x64_pe,
+    verify_sha256_manifest,
 )
 
 
 REPOSITORY = "CyberIncome/winget-app"
-ASSETS = [
-    DIST_DIR / "WingetUniversalDashboard-Setup-x64.exe",
-    DIST_DIR / "WingetUniversalDashboard.exe",
-    DIST_DIR / "WingetUniversalDashboardCLI.exe",
-    DIST_DIR / "SHA256SUMS.txt",
-]
 
 
-def _capture(*args: str) -> str:
-    return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+def _require_pushed_head(branch: str, head: str) -> None:
+    result = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise SystemExit(
+            f"Could not verify origin/{branch}; push the release commit first."
+        )
+    remote_head = result.stdout.split()[0].lower()
+    if remote_head != head.lower():
+        raise SystemExit(
+            f"Local {branch} ({head}) does not match origin/{branch} ({remote_head}). "
+            "Push the exact release commit before publishing."
+        )
 
 
-def _require_clean_master(allow_non_master: bool) -> str:
-    status = _capture("git", "status", "--porcelain")
-    if status:
-        raise SystemExit("Refusing to publish from a dirty working tree.")
-    branch = _capture("git", "branch", "--show-current")
+def _require_publish_source(allow_non_master: bool) -> tuple[str, str]:
+    head = require_clean_worktree()
+    branch = current_git_branch()
+    if not branch:
+        raise SystemExit("Refusing to publish from detached HEAD.")
     if branch != "master" and not allow_non_master:
         raise SystemExit(
             f"Refusing to publish from branch {branch!r}; merge to master first. "
             "Use --allow-non-master only for an intentional prerelease/test."
         )
-    return _capture("git", "rev-parse", "HEAD")
+    _require_pushed_head(branch, head)
+    return branch, head
+
+
+def _require_unused_remote_tag(tag: str) -> None:
+    result = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        raise SystemExit(
+            f"Remote tag {tag} already exists; refusing to create an ambiguous release."
+        )
+    if result.returncode not in (0, 2):
+        raise SystemExit(f"Could not verify whether remote tag {tag} already exists.")
 
 
 def main() -> int:
@@ -57,7 +96,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-non-master",
         action="store_true",
-        help="allow creating a release whose target is not master",
+        help="allow creating a release from a pushed non-master branch",
     )
     args = parser.parse_args()
 
@@ -70,9 +109,13 @@ def main() -> int:
 
     version, _numeric = read_version()
     tag = f"v{version}"
-    head = _require_clean_master(args.allow_non_master)
-    require_build_version(version)
-    require_files(ASSETS)
+    branch, head = _require_publish_source(args.allow_non_master)
+
+    require_build_identity(version, head)
+    require_files(UPLOAD_RELEASE_ASSETS)
+    require_x64_pe([SETUP_EXE, GUI_EXE, CLI_EXE])
+    verify_sha256_manifest(HASHED_RELEASE_ASSETS, CHECKSUMS_FILE)
+    _require_unused_remote_tag(tag)
 
     if subprocess.run([gh, "auth", "status"], cwd=ROOT, check=False).returncode != 0:
         raise SystemExit("GitHub CLI is not authenticated. Run: gh auth login")
@@ -92,7 +135,7 @@ def main() -> int:
         "release",
         "create",
         tag,
-        *(str(path) for path in ASSETS),
+        *(str(path) for path in UPLOAD_RELEASE_ASSETS),
         "-R",
         REPOSITORY,
         "--target",
@@ -103,7 +146,7 @@ def main() -> int:
     ]
     if not args.publish:
         command.append("--draft")
-    if args.prerelease or "-" in version:
+    if args.prerelease or is_prerelease(version) or branch != "master":
         command.append("--prerelease")
 
     print("$", subprocess.list2cmdline(command))

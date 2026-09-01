@@ -10,45 +10,40 @@ import shutil
 import subprocess
 
 from release_common import (
-    DIST_DIR,
+    BUILD_INFO_FILE,
+    CLI_EXE,
+    GUI_EXE,
     ROOT,
+    SETUP_EXE,
     numeric_version_text,
     read_version,
-    require_build_version,
+    require_build_identity,
+    require_clean_worktree,
     require_x64_pe,
 )
 
 
 INSTALLER_SCRIPT = ROOT / "installer" / "WingetUniversalDashboard.iss"
-GUI_EXE = DIST_DIR / "WingetUniversalDashboard.exe"
-CLI_EXE = DIST_DIR / "WingetUniversalDashboardCLI.exe"
-SETUP_EXE = DIST_DIR / "WingetUniversalDashboard-Setup-x64.exe"
 
 
 def find_iscc() -> Path:
-    """Find Inno Setup 7's command-line compiler."""
     explicit = os.getenv("INNO_SETUP_COMPILER", "").strip()
     candidates: list[Path] = []
     if explicit:
         candidates.append(Path(explicit))
-
     for executable in ("ISCC.exe", "ISCC"):
         found = shutil.which(executable)
         if found:
             candidates.append(Path(found))
-
     for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
         base = os.getenv(env_name)
         if not base:
             continue
         base_path = Path(base)
-        candidates.extend(
-            [
-                base_path / "Inno Setup 7" / "ISCC.exe",
-                base_path / "Programs" / "Inno Setup 7" / "ISCC.exe",
-            ]
-        )
-
+        candidates.extend([
+            base_path / "Inno Setup 7" / "ISCC.exe",
+            base_path / "Programs" / "Inno Setup 7" / "ISCC.exe",
+        ])
     seen: set[str] = set()
     for candidate in candidates:
         key = str(candidate).lower()
@@ -57,12 +52,25 @@ def find_iscc() -> Path:
         seen.add(key)
         if candidate.is_file():
             return candidate
-
     raise FileNotFoundError(
         "Inno Setup compiler (ISCC.exe) was not found. Install current 64-bit "
         "Inno Setup 7 with: winget install --id JRSoftware.InnoSetup.7 -e "
         "-s winget -i, or set INNO_SETUP_COMPILER to ISCC.exe."
     )
+
+
+def _require_inno_7(compiler: Path) -> None:
+    completed = subprocess.run(
+        [str(compiler), "/?"], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, errors="replace", check=False, timeout=30,
+    )
+    banner = f"{completed.stdout}\n{completed.stderr}"
+    if "Inno Setup 7" not in banner:
+        raise RuntimeError(
+            f"{compiler} does not appear to be Inno Setup 7. "
+            "Install JRSoftware.InnoSetup.7 or set INNO_SETUP_COMPILER accordingly."
+        )
 
 
 def build_installer() -> Path:
@@ -72,10 +80,14 @@ def build_installer() -> Path:
         raise SystemExit(f"Installer script is missing: {INSTALLER_SCRIPT}")
 
     version, numeric = read_version()
-    require_build_version(version)
+    commit = require_clean_worktree()
+    require_build_identity(version, commit)
     require_x64_pe([GUI_EXE, CLI_EXE])
+    if not BUILD_INFO_FILE.is_file():
+        raise SystemExit(f"Build identity file is missing: {BUILD_INFO_FILE}")
 
     compiler = find_iscc()
+    _require_inno_7(compiler)
     command = [
         str(compiler),
         f"--define=AppVersion={version}",
@@ -94,8 +106,7 @@ def build_installer() -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.parse_args()
+    argparse.ArgumentParser().parse_args()
     build_installer()
     return 0
 

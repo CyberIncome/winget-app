@@ -8,7 +8,15 @@ import os
 from pathlib import Path
 import shutil
 
-from release_common import read_version, require_x64_pe, write_build_version
+from release_common import (
+    CLI_EXE,
+    GUI_EXE,
+    current_git_commit,
+    read_version,
+    require_x64_pe,
+    worktree_is_dirty,
+    write_build_identity,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,7 +110,6 @@ def _common_args(name: str, version_file: Path) -> list[str]:
 
 
 def build_gui() -> Path:
-    """Build the canonical RuntimeMainWindow GUI executable."""
     name = "WingetUniversalDashboard"
     version_file = _version_file(name, "Winget Universal Dashboard")
     _pyinstaller_run(
@@ -112,11 +119,10 @@ def build_gui() -> Path:
             str(ROOT / "launcher.py"),
         ]
     )
-    return DIST_DIR / f"{name}.exe"
+    return GUI_EXE
 
 
 def build_cli() -> Path:
-    """Build the console CLI executable."""
     name = "WingetUniversalDashboardCLI"
     version_file = _version_file(name, "Winget Universal Dashboard CLI")
     _pyinstaller_run(
@@ -125,7 +131,7 @@ def build_cli() -> Path:
             str(ROOT / "cli_launcher.py"),
         ]
     )
-    return DIST_DIR / f"{name}.exe"
+    return CLI_EXE
 
 
 def main() -> int:
@@ -138,24 +144,22 @@ def main() -> int:
     args = parser.parse_args()
 
     _require_windows()
+    version, _numeric = read_version()
+    commit = current_git_commit()
+    dirty = worktree_is_dirty()
+
     if args.clean_output:
         shutil.rmtree(BUILD_DIR, ignore_errors=True)
         shutil.rmtree(DIST_DIR, ignore_errors=True)
 
     artifacts = [build_gui(), build_cli()]
-    missing = [str(path) for path in artifacts if not path.is_file()]
-    if missing:
-        raise SystemExit(
-            "Build completed without expected artifact(s): " + ", ".join(missing)
-        )
-
     require_x64_pe(artifacts)
-    version, _numeric = read_version()
-    write_build_version(version)
+    write_build_identity(version, commit, dirty=dirty)
 
     print("Built AMD64 artifacts:")
     for artifact in artifacts:
         print(f"  {artifact} ({artifact.stat().st_size:,} bytes)")
+    print(f"Source identity: v{version} @ {commit} (dirty={dirty})")
     return 0
 
 
