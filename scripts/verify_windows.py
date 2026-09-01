@@ -3,7 +3,8 @@
 
 This is intentionally local/offline-first. It does not require GitHub Actions
 and does not modify installed packages. Pass ``--live-winget`` to add a
-read-only Winget update scan after the deterministic checks pass.
+read-only Winget update scan. Pass ``--build`` to package and launch both local
+release artifacts after deterministic checks pass.
 """
 
 from __future__ import annotations
@@ -26,15 +27,25 @@ def _version(distribution: str) -> str:
         return "NOT INSTALLED"
 
 
-def _run(label: str, command: list[str], timeout: int) -> bool:
+def _run(
+    label: str,
+    command: list[str],
+    timeout: int,
+    environment: dict[str, str] | None = None,
+) -> bool:
     print(f"\n== {label} ==")
     print("$", subprocess.list2cmdline(command))
+    env = None
+    if environment is not None:
+        env = os.environ.copy()
+        env.update({str(key): str(value) for key, value in environment.items()})
     try:
         completed = subprocess.run(
             command,
             cwd=ROOT,
             timeout=timeout,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         print(f"FAIL: timed out after {timeout}s", file=sys.stderr)
@@ -66,6 +77,7 @@ def _print_environment() -> None:
         "pytest",
         "pytest-qt",
         "ruff",
+        "pyinstaller",
     ):
         print(f"{distribution}: {_version(distribution)}")
 
@@ -80,6 +92,11 @@ def main() -> int:
             "checks"
         ),
     )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="also build and launch-smoke both PyInstaller release artifacts",
+    )
     args = parser.parse_args()
 
     if os.name != "nt":
@@ -91,7 +108,7 @@ def main() -> int:
 
     _print_environment()
 
-    checks = [
+    checks: list[tuple[str, list[str], int, dict[str, str] | None]] = [
         (
             "compile all Python sources",
             [
@@ -104,6 +121,7 @@ def main() -> int:
                 "scripts",
             ],
             120,
+            None,
         ),
         (
             "static correctness lint",
@@ -119,6 +137,7 @@ def main() -> int:
                 "scripts",
             ],
             120,
+            None,
         ),
         (
             "native Windows lifecycle integration",
@@ -128,31 +147,36 @@ def main() -> int:
                 "pytest",
                 "-q",
                 "tests/test_windows_lifecycle.py",
+                "tests/test_runtime_shutdown.py",
                 "tests/test_remote_versions.py",
             ],
-            180,
+            240,
+            None,
         ),
         (
             "full pytest suite",
             [sys.executable, "-m", "pytest", "-q"],
             600,
+            None,
         ),
         (
             "CLI import/command smoke",
             [sys.executable, "-m", "src.cli", "--help"],
             60,
+            None,
         ),
         (
-            "production GUI create/close smoke",
+            "runtime GUI create/close smoke",
             [sys.executable, "scripts/smoke_gui.py"],
             60,
+            None,
         ),
     ]
 
     if args.live_winget:
         checks.extend(
             [
-                ("Winget executable", ["winget", "--version"], 60),
+                ("Winget executable", ["winget", "--version"], 60, None),
                 (
                     "read-only Winget update scan",
                     [
@@ -163,13 +187,40 @@ def main() -> int:
                         "check",
                     ],
                     600,
+                    None,
+                ),
+            ]
+        )
+
+    if args.build:
+        gui_artifact = ROOT / "dist" / "WingetUniversalDashboard.exe"
+        cli_artifact = ROOT / "dist" / "WingetUniversalDashboardCLI.exe"
+        checks.extend(
+            [
+                (
+                    "build local release artifacts",
+                    [sys.executable, "scripts/build_windows.py", "--clean-output"],
+                    1200,
+                    None,
+                ),
+                (
+                    "packaged CLI smoke",
+                    [str(cli_artifact), "--help"],
+                    60,
+                    None,
+                ),
+                (
+                    "packaged GUI create/close smoke",
+                    [str(gui_artifact)],
+                    90,
+                    {"WUD_PACKAGED_SMOKE": "1"},
                 ),
             ]
         )
 
     failures = 0
-    for label, command, timeout in checks:
-        if not _run(label, command, timeout):
+    for label, command, timeout, environment in checks:
+        if not _run(label, command, timeout, environment):
             failures += 1
 
     print("\n== verdict ==")
