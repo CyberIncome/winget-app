@@ -23,7 +23,7 @@ from src.ui.main_window import UpdateModel
 
 
 class ProductionUpdateModel(UpdateModel):
-    """Update model that preserves the source field required by the product spec."""
+    """Update model with source-aware identity and source display."""
 
     def __init__(self, data=None, is_inventory=False):
         super().__init__(data=data, is_inventory=is_inventory)
@@ -36,16 +36,53 @@ class ProductionUpdateModel(UpdateModel):
                 "Available",
                 "Source",
             ]
+            self._selected = {
+                self.selection_key_for_item(item): False
+                for item in self._data
+            }
+
+    def selection_key_for_item(self, item):
+        """Return a checkbox identity that distinguishes package sources."""
+        base = item.get("Id") or item.get("Name")
+        if self._is_inventory:
+            return base
+        return (base, item.get("Source", ""))
 
     def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
         if (
-            index.isValid()
-            and not self._is_inventory
+            not self._is_inventory
+            and role == Qt.CheckStateRole
+            and index.column() == 0
+        ):
+            item = self._data[index.row()]
+            key = self.selection_key_for_item(item)
+            return Qt.Checked if self._selected.get(key, False) else Qt.Unchecked
+        if (
+            not self._is_inventory
             and role == Qt.DisplayRole
             and index.column() == 5
         ):
             return self._data[index.row()].get("Source", "")
         return super().data(index, role)
+
+    def set_checked(self, row, checked, emit_signal=False):
+        """Set a checkbox without merging rows from different sources."""
+        if self._is_inventory:
+            return super().set_checked(row, checked, emit_signal=emit_signal)
+        if row < 0 or row >= len(self._data):
+            return False
+        item = self._data[row]
+        key = self.selection_key_for_item(item)
+        if self._selected.get(key) == checked:
+            return False
+        self._selected[key] = checked
+        index = self.index(row, 0)
+        self.dataChanged.emit(index, index, [Qt.CheckStateRole])
+        if emit_signal:
+            self.check_toggled.emit(row, checked)
+        return True
 
 
 class ProductionMainWindow(HardenedMainWindow):
@@ -176,8 +213,11 @@ class ProductionMainWindow(HardenedMainWindow):
                     item["Available"] = official
                     restored = True
             elif item_id not in existing_objects:
+                legacy_key = item.get("Id") or item.get("Name")
+                model._selected.pop(legacy_key, None)
                 item["UpdateSource"] = "detective"
                 item.setdefault("Source", "detective")
+                model._selected[model.selection_key_for_item(item)] = False
         if restored:
             model.layoutChanged.emit()
 
@@ -212,6 +252,12 @@ class ProductionMainWindow(HardenedMainWindow):
             str(ref.get("source") or "").lower(),
         )
 
+    @staticmethod
+    def _selection_key(model, item):
+        if hasattr(model, "selection_key_for_item"):
+            return model.selection_key_for_item(item)
+        return item.get("Id") or item.get("Name")
+
     def _selected_source_items(self, table, proxy):
         model = proxy.sourceModel() if proxy else None
         if model is None:
@@ -221,7 +267,7 @@ class ProductionMainWindow(HardenedMainWindow):
             item
             for item in model._data
             if model._selected.get(
-                item.get("Id") or item.get("Name"), False
+                self._selection_key(model, item), False
             )
         ]
         if checked:
@@ -421,9 +467,9 @@ class ProductionMainWindow(HardenedMainWindow):
             if target_source and item_source != target_source:
                 continue
 
+            selection_key = self._selection_key(model, item)
             model.beginRemoveRows(QModelIndex(), row_index, row_index)
-            removed = model._data.pop(row_index)
-            selection_key = removed.get("Id") or removed.get("Name")
+            model._data.pop(row_index)
             model._selected.pop(selection_key, None)
             model.endRemoveRows()
             self._stat_updates = len(model._data)
