@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from src.ui.production_window import ProductionMainWindow
+from src.ui.runtime_window import RuntimeMainWindow
 
 
-def test_console_history_has_finite_block_limit(qtbot):
-    window = ProductionMainWindow()
+def test_console_history_has_original_finite_block_limit(qtbot):
+    window = RuntimeMainWindow()
     qtbot.addWidget(window)
 
-    assert window.console.maximumBlockCount() == 10_000
+    assert window.console.maximumBlockCount() == 2_000
 
 
 def test_unterminated_process_line_is_bounded(qtbot):
-    window = ProductionMainWindow()
+    window = RuntimeMainWindow()
     qtbot.addWidget(window)
 
     window._handle_process_output("stdout", "x" * (64 * 1024))
@@ -25,7 +25,7 @@ def test_unterminated_process_line_is_bounded(qtbot):
 
 
 def test_completed_lines_survive_while_oversized_live_tail_is_bounded(qtbot):
-    window = ProductionMainWindow()
+    window = RuntimeMainWindow()
     qtbot.addWidget(window)
 
     window._handle_process_output(
