@@ -19,9 +19,16 @@ The deterministic default gate runs:
 
 1. Python bytecode compilation for `src`, `tests`, and `scripts`.
 2. Ruff correctness checks (`E9`, `F63`, `F7`, `F82`).
-3. The complete pytest suite, including pytest-qt production/lifecycle tests.
-4. A CLI import/command smoke test.
-5. `scripts/smoke_gui.py`, which creates, shows, and cleanly closes the real
+3. A named native Windows lifecycle suite that uses synthetic Python children
+   only. It exercises real multiprocessing `spawn`, managed-job success,
+   cancellation, timeout, abrupt child exit, QProcess `FailedToStart`
+   recovery, QProcess crash/no-retry behavior, watchdog kill/no-retry behavior,
+   and closing `ProductionMainWindow` while an owned spawned child is active.
+   It also exercises the hardened remote-version detector with fake network
+   responses; it does not install, remove, or update packages.
+4. The complete pytest suite, including pytest-qt production/lifecycle tests.
+5. A CLI import/command smoke test.
+6. `scripts/smoke_gui.py`, which creates, shows, and cleanly closes the real
    `ProductionMainWindow` before startup scans begin. This exercises target-OS
    Qt/Win32 construction and teardown without invoking Winget or modifying the
    machine.
