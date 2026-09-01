@@ -4,207 +4,218 @@ Date: 2026-09-01
 Branch: `audit/ferrox-reliability-hardening`
 Base: `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`
 
-## Executive summary
+## Executive verdict
 
-The repository was audited from its entry points through GUI orchestration, Winget command construction and parsing, Windows inventory/version discovery, background execution, configuration persistence, remote-version HTTP behavior, tests, launchers, repository hygiene, and verification tooling.
+The repository-wide implementation, static, architecture, and pure-Python hardening audit is complete.
 
-The original application had several plausible crash/hang paths and a number of correctness paths that could make a failure look like a successful empty scan or could execute an update with weaker package provenance than the UI implied. The hardening branch restructures those areas without replacing the historical presentation layer.
+The branch is materially safer than `master` across the crash/hang paths that motivated the audit: background ownership, startup overlap, QProcess state handling, shutdown races, output memory bounds, malformed Winget output, package/source provenance, selector validation, config persistence, redirect credential handling, diagnostics, and build reproducibility.
 
-At the end of the implementation/static audit:
+**Implementation/static/pure-Python audit: PASS.**
 
-- no known implementation/static audit failure remains open;
-- the production GUI no longer relies on unowned fire-and-forget daemon threads for long-running inventory, parse, detective, or API work;
-- startup is staged and shutdown owns/cancels spawned work;
-- Winget process failures are separated into start failure, crash, timeout, normal failure, and success;
-- malformed or partial Winget upgrade output fails closed;
-- package source provenance is preserved for exact update targeting;
-- registry uninstall IDs are no longer treated as Winget IDs;
-- detective-only version findings are informational rather than executable authority;
-- configuration and PAT persistence are substantially safer;
-- HTTP redirects are bounded and cross-origin credential forwarding is constrained;
-- tracked generated caches and misleading historical audit output are removed;
-- a reproducible local Windows acceptance gate is included because GitHub Actions minutes are unavailable.
+**Native Windows acceptance: PENDING.**
 
-The branch is **not yet release-accepted**. Native Windows behavior involving PySide6, `QProcess`, COM, pywin32, multiprocessing `spawn`, App Installer, the credential store, and the real Winget executable still requires the supplied Windows acceptance procedure.
+**Packaged Windows acceptance: PENDING.**
 
-## Architecture after hardening
+**Merge/release recommendation: HOLD only until the supplied native Windows gate passes.**
 
-### Canonical GUI path
+That hold is evidence-based, not a known implementation failure. The audit host is Linux and has no PySide6/pywin32/COM/real Winget runtime, so those boundaries cannot be honestly certified here.
 
-`launcher.py` -> `src.main.main()` -> `ProductionMainWindow`
+## Final canonical architecture
 
-`ProductionMainWindow` extends `HardenedMainWindow`, which extends the historical `MainWindow` implementation. The historical presentation/model code is preserved in `src/ui/legacy_window.py`. `src/ui/main_window.py` is a compatibility export shim and its direct-execution path routes back through `src.main`, preventing an alternate launch from silently bypassing the production safety layer.
+```text
+launcher.py
+  -> src.main.main()
+     -> RuntimeMainWindow
+        -> ProductionMainWindow
+           -> HardenedMainWindow
+              -> historical MainWindow presentation
+```
 
-### Background work
+The historical UI implementation is preserved in `src/ui/legacy_window.py`. `src/ui/main_window.py` is an import/model compatibility shim whose direct execution routes back through `src.main`, preventing an alternate unhardened launch path.
 
-The production GUI uses `ManagedProcessJob` for expensive/background operations:
+The historical parser/inventory implementation is preserved in `src/logic/legacy_parser.py`. `src/logic/parser.py` is the compatibility facade and hardened parse/network entry points live in dedicated modules.
 
-- registry + total inventory scan;
-- strict Winget-output parsing and registry enrichment;
-- remote-version detective scan;
-- GitHub rate-limit status.
+## What changed and why
 
-Worker targets serialize one success/failure envelope through a multiprocessing queue. The Qt-side owner provides bounded timeout, cancellation, terminate/join/kill escalation, queue cleanup, and lifecycle logging.
+### 1. Background work became owned work
 
-The main Winget update/scan process remains a Qt `QProcess`, because it needs live stdout/stderr/progress integration. Its lifetime is explicitly watched and terminated during shutdown.
+The original GUI used daemon threads for inventory, parsing/detective/API paths. Long-running production work now runs through `ManagedProcessJob` and spawned worker processes with one-result envelopes, timeout, cancellation, terminate/join/kill escalation, queue cleanup, and lifecycle logging.
 
-## Highest-impact defects found and repaired
+### 2. Startup became staged
 
-### 1. Unowned background thread lifecycle — high reliability impact
+Startup now progresses refresh -> parse -> inventory -> detective -> API instead of launching heavyweight registry/COM/network/process work concurrently.
 
-The historical window launched daemon Python threads for inventory, detective/API work, and parsing. Those threads could outlive closing Qt objects and had no deterministic cancellation or ownership.
+### 3. QProcess states became explicit
 
-Production overrides route the long-running work through managed spawned processes. A static regression test now discovers every legacy method containing a `threading.Thread` launch and asserts that the production inheritance chain overrides it.
+FailedToStart, CrashExit, watchdog timeout, normal non-zero installer failure, and success are separate states. Only a normal installer failure can retry once without `--silent`; crash/timeout cannot.
 
-### 2. Overlapping startup workload — high reliability/performance impact
+A missing Winget executable aborts the rest of a batch instead of repeatedly attempting the same unavailable process.
 
-The old startup scheduled update scan, inventory scan, and API work independently within a short interval. Inventory could also trigger detective work immediately, producing simultaneous registry/COM/network/Qt activity.
+### 4. Final QProcess exception containment moved to the canonical runtime
 
-Startup now advances through explicit stages: refresh -> parse -> inventory -> detective -> API.
+The first hardening pass still left synchronous `state/start/kill/wait/terminate` wrapper/handle exceptions capable of escaping button/timer/shutdown callbacks. `RuntimeMainWindow` now owns the final QProcess boundary and contains:
 
-### 3. QProcess failure-state conflation — high reliability/correctness impact
+- refresh-start exceptions;
+- update-batch-start exceptions;
+- watchdog exceptions;
+- close-time `state`, `terminate`, `waitForFinished`, and `kill` failures;
+- managed-job cancellation failures during close.
 
-Failed-to-start, crash, timeout, normal installer failure, and success previously shared too much completion behavior. In particular, a crash could enter retry logic intended only for a normal non-silent installer failure.
+Hostile-QProcess regression tests intentionally raise different exception families to keep this boundary broad only where shutdown/recovery requires it.
 
-The hardened controller tracks crash and timeout state separately. Only a normal non-zero package update may retry once without `--silent`. A missing Winget executable aborts the remaining batch rather than attempting the same impossible start repeatedly.
+### 5. Watchdog semantics were corrected
 
-### 4. Output-idle watchdog false positives — high reliability impact
+Output silence is diagnostic only. Hard termination uses total elapsed time, avoiding false kills of quiet installers.
 
-The old watchdog killed a process because it had produced no output for a fixed interval. A legitimate installer can remain silent while still making progress.
+### 6. Winget refresh output is an explicit bounded protocol
 
-The watchdog now uses total elapsed time as the hard termination condition. Output silence produces a diagnostic warning only.
+The GUI preserves raw stdout bytes for the authoritative parser rather than decoding arbitrary readyRead chunks independently. The authoritative buffer is capped; overflow or stdout-read failure invalidates the scan and cannot become a truncated successful result.
 
-### 5. Winget table parsing failed open — high correctness impact
+Live rendering is separately bounded. Canonical console history remains 2,000 blocks and a never-terminated live line is limited to 16 KiB.
 
-The historical parser could treat malformed output as zero updates and could accept partial tables while silently dropping malformed/truncated rows.
+### 7. CLI output capture became bounded too
 
-The strict parser validates required columns, ordering, separator structure, row boundaries, and every package row. Any malformed data row fails the entire parse. An empty recognized table also fails unless Winget emitted a recognized no-update marker.
+Non-interactive CLI execution no longer uses unbounded `capture_output=True`. stdout/stderr are written to temporary files and at most 5 MiB per stream is decoded. Overflow is explicit non-success even when the child exits 0, so a truncated update table cannot masquerade as authoritative output.
 
-### 6. Package-source provenance loss — high update-safety impact
+### 8. Localized Winget parsing now fails closed
 
-A package ID is not necessarily globally unique across configured sources. The update model originally did not retain source identity through checkbox selection, deduplication, command construction, or row removal.
+The strict parser treats rendered `winget upgrade` output as a protocol:
 
-Source is now displayed and retained in the executable package reference. Duplicate IDs from separate sources maintain independent checkbox state and separate update refs. Exact update commands include `--source` when the scan supplied it. Current Microsoft WinGet behavior explicitly supports source restriction for this kind of disambiguation.
+- requires a valid table/separator layout or known no-update marker;
+- supports four columns plus optional Source;
+- uses terminal display-cell widths for CJK/full-width text;
+- rejects malformed/partial rows as a whole-scan failure;
+- preserves Winget authority even when local version parsing is uncertain;
+- rejects a calculated boundary that would split adjacent non-space characters, preventing one-cell Unicode-width disagreement from shifting a package ID.
 
-### 7. Registry uninstall IDs treated as Winget provenance — high update-safety impact
+The final parser safety change initially broke a legitimate German truncated-ID fixture. Fresh current-blob testing caught that regression (14 pass / 1 fail). The invariant was narrowed correctly and the exact parser suite then passed 15/15.
 
-Inventory `Id` values come from Windows uninstall registry subkeys. They are local inventory identifiers, not proof of a Winget package identity. The final adversarial pass found that an accidental registry-ID collision with a different Winget package could theoretically select the wrong update row.
+### 9. Package targeting is provenance-aware
 
-Inventory-triggered updates now ignore inventory IDs completely. They require exactly one case-insensitive exact name match among current authoritative Winget upgrade rows; zero or multiple matches fail closed and no command is run.
+Source identity is retained in the production model, checkbox identity, package refs, deduplication, command construction, and row removal. Exact updates include `--source` when the scan supplies it.
 
-### 8. Detective results could alter executable update state — medium/high correctness impact
+Duplicate package IDs from different sources remain independently selectable.
 
-Remote-version detective results could overwrite a Winget-provided `Available` value or add a row that looked like a normal update target.
+### 10. Registry inventory cannot impersonate Winget identity
 
-Winget results remain authoritative. Detective-only rows are tagged as detective information and are excluded from Update All/Update Selected execution unless a current Winget upgrade row independently proves upgradeability.
+Windows uninstall registry IDs are local inventory identifiers, not Winget package IDs. Inventory-triggered updates no longer match on those IDs. They require one unique exact name match among current authoritative Winget upgrade rows; ambiguity fails closed.
 
-### 9. Selector validation bug found during verification — medium safety impact
+### 11. Detective findings are informational
 
-The hardening work initially used regex/end trimming in a way that could allow a newline-adjacent selector/source value through validation. The executable adversarial gate caught this defect in the new code before completion was accepted.
+Remote-version detective results cannot independently authorize Winget execution and cannot overwrite the authoritative Winget `Available` value.
 
-Validation now rejects CR, LF, and NUL explicitly and uses full-string matching for package IDs. Regression tests cover leading/trailing newline and embedded control-character cases.
+### 12. Selector/argument validation was tightened repeatedly
 
-### 10. HTTP redirect credential propagation — medium security impact
+Package IDs reject:
 
-The hardened transport initially removed explicit secret headers on cross-origin redirects but still retained caller-provided Requests `auth=` and `cookies=` keyword arguments across manual redirect hops.
+- display truncation/trailing-dot forms;
+- leading-dash option-like forms;
+- whitespace/injection-like grammar;
+- every ASCII control character plus DEL.
 
-Cross-origin redirects now clear Authorization/Proxy-Authorization/Cookie headers as well as explicit `auth=` and `cookies=` kwargs. HTTPS-only validation, redirect count limits, response-size caps, and credential-bearing URL rejection remain in force.
+Package names and source names reject control-bearing and option-like values. Commands are always argument arrays, never shell strings.
 
-### 11. Config/PAT persistence — medium reliability/security impact
+An earlier hardening version accepted a newline-adjacent case; the executable gate caught it and the validator was repaired before acceptance.
 
-Configuration now uses deep-copied defaults and values, atomic temp-file + fsync + replace writes, corrupt-file quarantine, and safe legacy PAT migration to the OS credential store. PAT edits are debounced rather than synchronously persisted on every keystroke, and a pending edit is flushed when the production window closes.
+### 13. Config/PAT persistence became interruption-safe
 
-### 12. CLI and GUI contract drift — medium correctness impact
+Config state uses deep copies, atomic temp-file + fsync + replace writes, corrupt-file quarantine, and guarded legacy PAT migration. The plaintext legacy secret is not removed until secure-store migration succeeds.
 
-CLI `check`/`status` had independently constructed Winget scan commands and `status` repeated registry work. CLI scans now use the same hardened noninteractive scan command as the GUI, expose source information, reuse registry data in `status`, and terminate/kill a live update child on Ctrl+C.
+PAT editing is debounced and pending state is flushed by the canonical runtime close path.
 
-### 13. Alternate legacy GUI entry point — medium reliability impact
+### 14. Remote HTTP behavior is bounded
 
-Executing the historical `main_window.py` directly could bypass the production controller. The old implementation is preserved as `legacy_window.py`; `main_window.py` now exports compatibility symbols and delegates direct execution to the canonical production entry point.
+Remote version requests use HTTPS-only absolute credential-free URLs, manual bounded redirects, response-size caps, and cross-origin removal of sensitive headers plus explicit Requests `auth=` / `cookies=` arguments.
 
-### 14. Repository audit/cache contamination — quality/diagnostic impact
+### 15. Diagnostics became durable
 
-Tracked `.pyc`/`__pycache__` artifacts were removed. Earlier generated audit reports had accidentally inspected a local virtual environment and some contained only encoding-error output. Those reports were removed rather than preserved as misleading evidence.
+Each GUI session has an ID. Rotating logs record process/job lifecycle and clean exit. Python main-thread/thread exceptions are logged and faulthandler provides a native-fault path where supported.
 
-## Verification performed
+### 16. The model compatibility layer was hardened
 
-### Executed in the current environment
+Qt data/setData/header access now defends stale/out-of-range indexes. Production source-aware selection identity is also honored by inherited helper methods, eliminating a state mismatch where checkboxes could be source-aware while helper APIs still looked up a plain ID.
 
-Because the current execution host is Linux and lacks PySide6/Windows APIs, verification was split rather than pretending cross-platform execution proves Windows behavior.
+### 17. Repository hygiene was corrected
 
-Executable pure-Python checks were rerun from exact branch source fetched through the connected GitHub repository interface. They covered:
+Tracked `.pyc` / `__pycache__` files were removed and ignored. Earlier generated audit files that had scanned virtual-environment content or contained encoding failures were removed instead of being retained as misleading evidence.
 
-- package ID/name/source validation and exact source-aware Winget command construction;
-- strict table parsing and malformed/partial table rejection;
-- command-runner success, non-zero exit, timeout, start failure, and wide-column environment behavior;
-- config deep-copy, atomic save, quarantine, and PAT migration behavior;
-- HTTPS URL validation, redirect safety, body caps, header-secret stripping, and auth/cookie kwarg stripping.
+Runtime and development/build requirements are split and constrained.
 
-The final tree was also inspected for generated caches and workflows, and the large-file writes made during the second audit were compared against their immediate parents to ensure unrelated code was not accidentally replaced.
+### 18. Windows packaging is reproducible from the repository
 
-### Regression tests committed for Windows/Qt
+`scripts/build_windows.py` builds one-file GUI and CLI artifacts with PyInstaller, bundled QSS, keyring backends, and keyring metadata.
 
-The branch includes regression coverage for:
+`scripts/verify_windows.py --build` builds both artifacts, runs the packaged CLI `--help`, and launches the packaged GUI in a private create/close smoke mode before startup scans begin.
 
-- production GUI source-aware update rows;
-- duplicate IDs from multiple sources;
-- independent source-aware checkbox state;
-- registry-ID collision prevention;
-- ambiguous inventory names failing closed;
-- detective-only informational behavior;
-- preservation of authoritative Winget versions;
-- FailedToStart batch abort;
-- CrashExit no-retry behavior;
-- pending PAT flush at close;
-- canonical hardened entrypoint;
-- legacy daemon-thread launch methods being overridden;
-- managed spawned-process cleanup;
-- CLI scan-command parity;
-- production Qt create/show/clean-close smoke behavior.
+## Final executable evidence
 
-## Verification failures that changed the implementation
+The final verification loop reconstructed current GitHub branch files locally and verified their Git object hashes before execution.
 
-This audit deliberately records failed verification rather than reporting only green results.
+Exact current source blobs:
 
-The most important example was the selector/source control-character gate. It failed after the first hardening implementation, demonstrating that the validator could accept a newline-adjacent value. The implementation and tests were changed, and the executor gate was restarted from zero and passed.
+- executor: `63447020d4cfb66188af63290763ff52d0ea3ba3`
+- output decoder: `a0301c0419b4ed01742b85501a2b0572bbea40bf`
+- bounded command runner: `530c9b0ef766032e226ce69e6b9c6163c6cd5f4e`
+- final strict parser: `edc4f1b0712eada3388a96401a1a17505557759c`
 
-The final adversarial architecture pass also found the registry-ID provenance collision and cross-origin `auth=`/`cookies=` issue after earlier phases had appeared complete. Both were added to scope, repaired, and regression-tested. These are concrete examples of the "do not accept finished blindly" process applied to this repository.
+Exact current test blobs were also reconstructed for executor, selector controls, decoder, bounded command runner and strict parser.
 
-## Repository state
+Fresh final-loop result:
 
-The branch is intentionally based on the original `master` commit listed above and has remained ahead of—not behind—the base during the hardening work. Application-source deletions were not used as a shortcut; the major apparent `main_window.py` deletion in the branch diff is the move of the exact historical implementation to `legacy_window.py` plus a small compatibility shim.
+- executor / selector / decoder / command-runner: **50 passed**;
+- strict localized parser: **15 passed**;
+- total: **65 passed**.
 
-The final tree contains no tracked Python bytecode caches and no GitHub Actions workflow. Runtime and verification dependencies are separated into `requirements.txt` and `requirements-dev.txt`.
+Earlier config and HTTP executable gates remain valid because those validated source/test blobs did not change afterward; final SHA/tree review confirmed continuity.
 
-## Remaining risk / required native acceptance
+## Branch/repository state
 
-No static/pure-Python implementation failure is currently open, but the following claims require the actual Windows runtime and therefore remain `WINDOWS-VERIFY`:
+The final branch remains based on the original `master` merge base and the branch-vs-master comparison reports `behind_by: 0`.
 
-- PySide6 `QProcess` signal ordering around FailedToStart/CrashExit/kill;
-- clean window close while spawned Windows inventory/COM work is active;
-- multiprocessing `spawn` behavior in the packaged/runtime environment;
-- pywin32 COM shortcut resolution and registry behavior on the target Windows version;
-- OS credential-store/keyring behavior;
-- App Installer/Winget executable behavior and real table formatting;
-- native crash/fault logging;
-- production UI interaction during real installs.
+No GitHub Actions workflow was introduced. The large apparent deletions of the historical UI/parser in the diff are moves into compatibility-preserved `legacy_window.py` and `legacy_parser.py`, not discarded application functionality.
 
-Run:
+## Known residuals
+
+These are not hidden and are intentionally not expanded into risky late rewrites.
+
+### Generic batch completion wording
+
+If one or more packages reach a final failure, the individual failure is logged and the failed row is not removed as success, but the queue can ultimately display the generic `Update complete.` status. This is a usability/reporting issue rather than an update-authority or lifecycle defect.
+
+### HTTPS is not full DNS/IP SSRF isolation
+
+The transport restricts scheme, redirects, body size and credentials, but does not resolve a hostname and reject private/link-local destination IPs. Correct DNS/IP-aware connection policy belongs in a separate networking hardening change; a string blacklist would create false confidence.
+
+### Unknown localized no-update prose fails closed
+
+Known English no-update markers are recognized. An unknown localized no-update sentence without a table is treated as parse failure rather than zero updates. This is intentionally conservative until Winget exposes a structured upgrade result.
+
+## Native acceptance still required
+
+The remaining evidence boundary is real Windows behavior:
+
+- PySide6/QProcess signal ordering;
+- pywin32 registry/COM shortcut behavior;
+- multiprocessing `spawn` under Windows and frozen builds;
+- Windows credential-store/keyring behavior;
+- real App Installer/Winget output and process behavior;
+- native fault logging;
+- packaged PyInstaller startup/teardown.
+
+Run from the exact branch:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
-python scripts\verify_windows.py --live-winget
+python scripts\verify_windows.py --live-winget --build
 ```
 
-Then perform the manual crash-boundary checks in `WINDOWS-VERIFICATION.md`.
+Then perform the manual scenarios in `WINDOWS-VERIFICATION.md`.
 
-## Merge/release recommendation
+## Final recommendation
 
-**Implementation/static audit:** PASS
+The code/audit work itself has reached the finish line available from this environment. There is no known release-blocking implementation/static/pure-Python failure left open.
 
-**Native Windows acceptance:** PENDING
-
-**Merge/release recommendation:** HOLD until the Windows gate and manual crash-boundary checks pass on the target machine. If they pass without producing a new failure, the branch is a substantially safer candidate than `master` for normal use and further packaging work.
+Do **not** merge merely because this report says the implementation audit passed. Run the native Windows gate first. If it passes without exposing a new defect, this branch is ready to merge as the reliability-hardened successor to `master`.
