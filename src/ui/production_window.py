@@ -2,10 +2,40 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QProcess
+import time
+
+from PySide6.QtCore import QProcess, Qt
+from PySide6.QtWidgets import QHeaderView, QTableView
 
 from src.logic.executor import is_valid_app_id
 from src.ui.hardened_window import HardenedMainWindow
+from src.ui.main_window import UpdateModel
+
+
+class ProductionUpdateModel(UpdateModel):
+    """Update model that preserves the source field required by the product spec."""
+
+    def __init__(self, data=None, is_inventory=False):
+        super().__init__(data=data, is_inventory=is_inventory)
+        if not is_inventory:
+            self.headers = [
+                "",
+                "Name",
+                "ID",
+                "Version",
+                "Available",
+                "Source",
+            ]
+
+    def data(self, index, role=Qt.DisplayRole):
+        if (
+            index.isValid()
+            and not self._is_inventory
+            and role == Qt.DisplayRole
+            and index.column() == 5
+        ):
+            return self._data[index.row()].get("Source", "")
+        return super().data(index, role)
 
 
 class ProductionMainWindow(HardenedMainWindow):
@@ -24,10 +54,6 @@ class ProductionMainWindow(HardenedMainWindow):
             or str(error).endswith("FailedToStart")
         )
         if failed_to_start:
-            # Keep the failed generation marked until a later process actually
-            # reaches Running. Qt normally does not emit finished() for a
-            # process that never started, but this guard makes that assumption
-            # non-destructive if a binding/platform behaves differently.
             self._failed_start_pending = True
         super().handle_process_error(error)
 
@@ -44,16 +70,48 @@ class ProductionMainWindow(HardenedMainWindow):
             return
         super().process_finished(code, status)
 
-    # ── Package provenance safety ───────────────────
+    # ── Winget update-model contract ────────────────
 
     def apply_winget_results(self, data):
-        """Tag scan results as the only package set Winget proved upgradeable."""
+        """Display source metadata and tag rows proven upgradeable by Winget."""
+        if self._is_closing:
+            return
         tagged = []
         for item in data or []:
             row = dict(item)
             row["UpdateSource"] = "winget"
             tagged.append(row)
-        super().apply_winget_results(tagged)
+
+        model = ProductionUpdateModel(tagged)
+        model.check_toggled.connect(
+            lambda row, checked: self.handle_native_checkbox(
+                self.table,
+                self.proxy_model,
+                row,
+                checked,
+            )
+        )
+        self.proxy_model.setSourceModel(model)
+        self.table.setSelectionMode(QTableView.ExtendedSelection)
+        self.table.setSelectionBehavior(QTableView.SelectRows)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 40)
+        for column in range(1, model.columnCount()):
+            column_name = model.headerData(column, Qt.Horizontal)
+            mode = (
+                QHeaderView.Stretch
+                if column_name == "Name"
+                else QHeaderView.ResizeToContents
+            )
+            header.setSectionResizeMode(column, mode)
+
+        self._stat_updates = len(tagged)
+        self._last_scan_time = time.strftime("%H:%M:%S")
+        self.set_ui_busy(
+            "Scanning for updates...", False, "refresh"
+        )
 
     def _detective_job_succeeded(self, results):
         """Keep detective-only update hits informational, not executable."""

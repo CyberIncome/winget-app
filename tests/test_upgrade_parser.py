@@ -15,12 +15,14 @@ Microsoft Visual Studio Code   Microsoft.VisualStudioCode   1.85.1           1.8
             "Id": "Google.Chrome",
             "Version": "120.0.6099.110",
             "Available": "120.0.6099.130",
+            "Source": "winget",
         },
         {
             "Name": "Microsoft Visual Studio Code",
             "Id": "Microsoft.VisualStudioCode",
             "Version": "1.85.1",
             "Available": "1.85.2",
+            "Source": "winget",
         },
     ]
 
@@ -33,6 +35,7 @@ Example App             Example.App           1.0.0        1.1.0
     rows = parse_upgrade_table(output)
     assert rows[0]["Id"] == "Example.App"
     assert rows[0]["Available"] == "1.1.0"
+    assert rows[0]["Source"] == ""
 
 
 def test_no_updates_is_empty():
@@ -62,4 +65,6 @@ Example App             Example.App           1.0.0        1.1.0
 
 def test_unrecognized_error_output_does_not_become_zero_updates():
     with pytest.raises(WingetParseError):
-        parse_upgrade_table("Failed when opening source(s); unexpected error")
+        parse_upgrade_table(
+            "Failed when opening source(s); unexpected error"
+        )

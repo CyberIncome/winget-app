@@ -79,8 +79,10 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
     """Parse validated rows from ``winget upgrade`` output.
 
     ``Source`` is optional because WinGet output can omit it depending on source
-    configuration/version. If output looks like an upgrade table but its
-    contract cannot be validated, ``WingetParseError`` is raised.
+    configuration/version. The returned row always contains a ``Source`` key;
+    it is an empty string when the column is absent. If output looks like an
+    upgrade table but its contract cannot be validated, ``WingetParseError`` is
+    raised.
     """
     if not output or not output.strip():
         return []
@@ -145,7 +147,12 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
             malformed_data_lines += 1
             continue
 
-        rows.append({name: row.get(name, "") for name in _REQUIRED_COLUMNS})
+        rows.append(
+            {
+                **{name: row.get(name, "") for name in _REQUIRED_COLUMNS},
+                "Source": row.get("Source", ""),
+            }
+        )
 
     if malformed_data_lines and not rows:
         raise WingetParseError(

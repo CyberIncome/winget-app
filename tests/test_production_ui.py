@@ -1,3 +1,5 @@
+from PySide6.QtCore import Qt
+
 from src.ui.main_window import UpdateModel
 from src.ui.production_window import ProductionMainWindow
 
@@ -8,16 +10,19 @@ def _winget_row(name="Google Chrome", package_id="Google.Chrome"):
         "Id": package_id,
         "Version": "120.0",
         "Available": "121.0",
+        "Source": "winget",
     }
 
 
-def test_winget_scan_rows_are_tagged_as_executable(qtbot):
+def test_winget_scan_rows_are_tagged_and_source_is_visible(qtbot):
     window = ProductionMainWindow()
     qtbot.addWidget(window)
     window.apply_winget_results([_winget_row()])
 
     model = window.proxy_model.sourceModel()
     assert model._data[0]["UpdateSource"] == "winget"
+    assert model.headerData(5, Qt.Horizontal) == "Source"
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "winget"
 
 
 def test_update_all_excludes_detective_only_rows(qtbot, monkeypatch):
@@ -31,13 +36,16 @@ def test_update_all_excludes_detective_only_rows(qtbot, monkeypatch):
         "Id": "Portable.Tool",
         "Version": "1.0",
         "Available": "2.0",
+        "Source": "detective",
         "UpdateSource": "detective",
     }
     model._data.append(detective)
     model._selected[detective["Id"]] = False
 
     captured = []
-    monkeypatch.setattr(window, "batch_update", lambda refs: captured.extend(refs))
+    monkeypatch.setattr(
+        window, "batch_update", lambda refs: captured.extend(refs)
+    )
     window.update_all()
 
     assert captured == [{"value": "Google.Chrome", "match_by": "id"}]
