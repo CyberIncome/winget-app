@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import subprocess
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -47,10 +48,28 @@ def _text(value) -> str:
 
 
 def run_command(
-    command: Sequence[str], timeout: float = 300
+    command: Sequence[str],
+    timeout: float = 300,
+    environment: Mapping[str, str] | None = None,
 ) -> CommandResult:
-    """Run a command and return a lossless structured outcome."""
+    """Run a command and return a lossless structured outcome.
+
+    WinGet formats its tabular output using the console width.  Force a wide
+    ``COLUMNS`` value unless the caller explicitly supplies another one so the
+    CLI receives the same non-truncated protocol surface as the GUI.
+    """
     normalized = tuple(str(part) for part in command)
+    process_environment = os.environ.copy()
+    if environment:
+        process_environment.update(
+            {str(key): str(value) for key, value in environment.items()}
+        )
+    process_environment.setdefault("COLUMNS", "300")
+    # An inherited COLUMNS value can be narrow.  For this app's command runner
+    # the stable table contract is more important than preserving terminal UI.
+    if environment is None or "COLUMNS" not in environment:
+        process_environment["COLUMNS"] = "300"
+
     try:
         completed = subprocess.run(
             normalized,
@@ -60,6 +79,7 @@ def run_command(
             encoding="utf-8",
             errors="replace",
             check=False,
+            env=process_environment,
         )
         return CommandResult(
             command=normalized,

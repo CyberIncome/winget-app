@@ -45,3 +45,30 @@ def test_command_result_start_failure_is_explicit():
     assert result.start_error
     assert result.returncode is None
     assert result.failure_summary().startswith("failed to start:")
+
+
+def test_command_runner_forces_wide_columns_by_default():
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('COLUMNS', ''))",
+        ],
+        timeout=5,
+    )
+    assert result.ok
+    assert result.stdout.strip() == "300"
+
+
+def test_command_runner_allows_explicit_columns_override():
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('COLUMNS', ''))",
+        ],
+        timeout=5,
+        environment={"COLUMNS": "512"},
+    )
+    assert result.ok
+    assert result.stdout.strip() == "512"
