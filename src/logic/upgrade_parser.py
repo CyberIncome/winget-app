@@ -77,14 +77,21 @@ def _is_separator(line: str) -> bool:
 
 def _header_layout(header: str) -> tuple[list[int], bool]:
     """Return localized column starts as terminal display columns."""
-    matches = list(_HEADER_FIELD_RE.finditer(header.strip()))
+    stripped = header.strip()
+    token_matches = list(re.finditer(r"\S+", stripped))
+    if len(token_matches) in {4, 5}:
+        matches = token_matches
+    else:
+        # Multiword translated labels use ordinary single spaces internally,
+        # while table column padding normally contains two or more spaces.
+        matches = list(_HEADER_FIELD_RE.finditer(stripped))
     if len(matches) not in {4, 5}:
         raise WingetParseError(
             "Winget upgrade table header did not expose a safe 4/5-column layout"
         )
 
     starts = [
-        _display_width(header[: match.start()])
+        _display_width(stripped[: match.start()])
         for match in matches
     ]
     if starts != sorted(starts) or len(set(starts)) != len(starts):
