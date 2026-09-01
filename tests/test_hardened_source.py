@@ -30,3 +30,17 @@ def test_changed_python_sources_parse_as_ast():
         ROOT / "src" / "logic" / "worker_jobs.py",
     ]:
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def test_production_entrypoint_uses_hardened_window():
+    main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "ProductionMainWindow" in main_source
+    assert "window = ProductionMainWindow()" in main_source
+
+
+def test_failed_start_guard_is_bounded():
+    source = (ROOT / "src" / "ui" / "production_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert "QTimer.singleShot(50" in source
+    assert "self._process_start_failed = False" in source

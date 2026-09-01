@@ -4,11 +4,14 @@ import logging
 import faulthandler
 import threading
 import time
+import uuid
 from multiprocessing import freeze_support
 from src.logic.config import CONFIG_DIR
 
 _BOOT_STARTED_AT = time.perf_counter()
 _FAULT_LOG_STREAM = None
+_SESSION_ID = os.getenv("WUD_SESSION_ID") or uuid.uuid4().hex[:12]
+os.environ.setdefault("WUD_SESSION_ID", _SESSION_ID)
 
 
 def _resolve_log_file():
@@ -55,10 +58,13 @@ def _install_crash_hooks(log_file):
             except OSError:
                 continue
 
-    def _log_unhandled_exception(exc_type, exc_value, exc_traceback, source):
+    def _log_unhandled_exception(
+        exc_type, exc_value, exc_traceback, source
+    ):
         logging.getLogger(__name__).critical(
-            "Unhandled exception in %s",
+            "Unhandled exception in %s session=%s",
             source,
+            _SESSION_ID,
             exc_info=(exc_type, exc_value, exc_traceback),
         )
 
@@ -113,59 +119,58 @@ def _configure_library_logging():
     """Reduce third-party debug noise in the persisted app log."""
     if os.getenv("WUD_VERBOSE_DEPS", "") == "1":
         return
-    for logger_name in [
-        "urllib3",
-        "keyring",
-        "win32ctypes",
-    ]:
+    for logger_name in ["urllib3", "keyring", "win32ctypes"]:
         logging.getLogger(logger_name).setLevel(logging.INFO)
 
 
 def main():
-    # Persist logs outside PyInstaller's temporary extraction directory.
+    """Start the Qt application with persistent diagnostics."""
     freeze_support()
     log_file = _resolve_log_file()
     handler, active_log_file = _create_log_handler(log_file)
-    
+
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            handler,
-            logging.StreamHandler(sys.stdout)
-        ]
+        handlers=[handler, logging.StreamHandler(sys.stdout)],
     )
     _configure_library_logging()
-
     _install_crash_hooks(log_file)
 
     logger = logging.getLogger(__name__)
     logger.info(
-        "Starting WingetGui. Log file: %s. Boot %.3fs",
+        "SESSION START id=%s pid=%s log=%s boot=%.3fs",
+        _SESSION_ID,
+        os.getpid(),
         active_log_file,
         time.perf_counter() - _BOOT_STARTED_AT,
     )
 
     from PySide6.QtWidgets import QApplication
-    from src.ui.main_window import MainWindow
+    from src.ui.production_window import ProductionMainWindow
 
     app = QApplication.instance()
     if not app:
         app = QApplication(sys.argv)
-    
-    # Load Styles
-    qss_path = os.path.join(os.path.dirname(__file__), "ui", "styles.qss")
-    if os.path.exists(qss_path):
-        with open(qss_path, "r", encoding="utf-8") as f:
-            app.setStyleSheet(f.read())
 
-    window = MainWindow()
+    qss_path = os.path.join(
+        os.path.dirname(__file__), "ui", "styles.qss"
+    )
+    if os.path.exists(qss_path):
+        with open(qss_path, "r", encoding="utf-8") as file_handle:
+            app.setStyleSheet(file_handle.read())
+
+    window = ProductionMainWindow()
     window.show()
-    
-    # In CI or if specifically testing, we might not want to exec_()
+
     if "pytest" not in sys.modules:
-        return app.exec()
+        exit_code = app.exec()
+        logger.info(
+            "SESSION EVENT LOOP EXIT id=%s code=%s", _SESSION_ID, exit_code
+        )
+        return exit_code
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -89,17 +89,37 @@ class ManagedProcessJob(QObject):
             except Empty:
                 pass
             except (EOFError, OSError, ValueError) as exc:
-                self._finish_failure(f"{self.name} result queue failed: {exc}")
+                self._finish_failure(
+                    f"{self.name} result queue failed: {exc}"
+                )
                 return
 
         if envelope is not None:
-            self._consume_envelope(envelope)
+            if envelope.get("ok"):
+                value = envelope.get("value")
+                self._cleanup_process(grace_seconds=0.5)
+                self._done = True
+                self._logger.info("JOB SUCCESS name=%s", self.name)
+                self.succeeded.emit(self.name, value)
+                self.finished.emit(self.name)
+                return
+            detail = envelope.get("error") or "unknown worker error"
+            trace = envelope.get("traceback")
+            if trace:
+                self._logger.error(
+                    "JOB CHILD TRACE name=%s\n%s", self.name, trace
+                )
+            self._finish_failure(
+                f"{self.name} failed "
+                f"({envelope.get('error_type', 'Error')}): {detail}"
+            )
             return
 
         elapsed = time.monotonic() - self._started_at
         if self._timeout_seconds > 0 and elapsed >= self._timeout_seconds:
             self._finish_failure(
-                f"{self.name} timed out after {self._timeout_seconds:.0f}s",
+                f"{self.name} timed out after "
+                f"{self._timeout_seconds:.0f}s",
                 terminate=True,
             )
             return
@@ -112,34 +132,32 @@ class ManagedProcessJob(QObject):
             except (Empty, EOFError, OSError, ValueError):
                 envelope = None
             if envelope is not None:
-                self._consume_envelope(envelope)
+                if envelope.get("ok"):
+                    value = envelope.get("value")
+                    self._cleanup_process()
+                    self._done = True
+                    self._logger.info(
+                        "JOB SUCCESS name=%s", self.name
+                    )
+                    self.succeeded.emit(self.name, value)
+                    self.finished.emit(self.name)
+                    return
+                detail = envelope.get("error") or "unknown worker error"
+                self._finish_failure(
+                    f"{self.name} failed: {detail}"
+                )
                 return
             self._finish_failure(
-                f"{self.name} exited without a result (exit code {exit_code})"
+                f"{self.name} exited without a result "
+                f"(exit code {exit_code})"
             )
-
-    def _consume_envelope(self, envelope: dict) -> None:
-        if envelope.get("ok"):
-            value = envelope.get("value")
-            self._cleanup_process(grace_seconds=0.5)
-            self._done = True
-            self._logger.info("JOB SUCCESS name=%s", self.name)
-            self.succeeded.emit(self.name, value)
-            self.finished.emit(self.name)
-            return
-
-        detail = envelope.get("error") or "unknown worker error"
-        trace = envelope.get("traceback")
-        if trace:
-            self._logger.error("JOB CHILD TRACE name=%s\n%s", self.name, trace)
-        self._finish_failure(
-            f"{self.name} failed ({envelope.get('error_type', 'Error')}): {detail}"
-        )
 
     def cancel(self, reason: str = "cancelled") -> None:
         if self._done:
             return
-        self._logger.info("JOB CANCEL name=%s reason=%s", self.name, reason)
+        self._logger.info(
+            "JOB CANCEL name=%s reason=%s", self.name, reason
+        )
         self._timer.stop()
         self._cleanup_process(terminate=True)
         self._done = True
@@ -150,7 +168,9 @@ class ManagedProcessJob(QObject):
         self._timer.stop()
         self._cleanup_process(terminate=terminate)
         self._done = True
-        self._logger.error("JOB FAILED name=%s detail=%s", self.name, message)
+        self._logger.error(
+            "JOB FAILED name=%s detail=%s", self.name, message
+        )
         self.failed.emit(self.name, message)
         self.finished.emit(self.name)
 
@@ -162,19 +182,24 @@ class ManagedProcessJob(QObject):
         self._timer.stop()
         process = self._process
         if process is not None:
-            if terminate and process.is_alive():
-                process.terminate()
-            process.join(timeout=grace_seconds)
-            if process.is_alive():
-                self._logger.warning(
-                    "JOB FORCE KILL name=%s pid=%s", self.name, process.pid
-                )
-                process.kill()
-                process.join(timeout=1.0)
-            try:
-                process.close()
-            except (OSError, ValueError):
-                pass
+            # Process.start itself can fail. An unstarted Process has no pid
+            # and Python raises AssertionError if it is joined/is_alive.
+            if process.pid is not None:
+                if terminate and process.is_alive():
+                    process.terminate()
+                process.join(timeout=grace_seconds)
+                if process.is_alive():
+                    self._logger.warning(
+                        "JOB FORCE KILL name=%s pid=%s",
+                        self.name,
+                        process.pid,
+                    )
+                    process.kill()
+                    process.join(timeout=1.0)
+                try:
+                    process.close()
+                except (OSError, ValueError):
+                    pass
             self._process = None
 
         queue = self._queue
