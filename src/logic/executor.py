@@ -13,24 +13,29 @@ def _has_control_separator(value):
     return any(char in value for char in ("\r", "\n", "\x00"))
 
 
+def _is_safe_app_id(value):
+    """Return whether value can represent a complete exact package ID."""
+    return bool(
+        value
+        and not value.endswith(".")
+        and not _has_control_separator(value)
+        and _VALID_APP_ID_RE.fullmatch(value)
+    )
+
+
 def validate_app_id(app_id):
-    """Validate a Winget package ID before adding it as an argument."""
+    """Validate a complete Winget package ID before adding it as an argument."""
     raw = "" if app_id is None else str(app_id)
-    if not raw or _has_control_separator(raw) or not _VALID_APP_ID_RE.fullmatch(raw):
+    if not _is_safe_app_id(raw):
         raise ValueError(f"Invalid app ID rejected: {app_id!r}")
     return raw
 
 
 def is_valid_app_id(app_id):
-    """Return whether a string is a safe Winget package ID."""
+    """Return whether a string is a complete safe Winget package ID."""
     if app_id is None:
         return False
-    raw = str(app_id)
-    return bool(
-        raw
-        and not _has_control_separator(raw)
-        and _VALID_APP_ID_RE.fullmatch(raw)
-    )
+    return _is_safe_app_id(str(app_id))
 
 
 def validate_package_name(package_name):
