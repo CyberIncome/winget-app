@@ -1,11 +1,11 @@
 # Reliability Hardening Verification
 
-Status: **RELEASE ACCEPTANCE PASSED**
+Status: **APPLICATION / RUNTIME ACCEPTANCE PASSED — NEW X64 INSTALLER ACCEPTANCE PENDING**
 
 Branch: `audit/ferrox-reliability-hardening`
 Base: `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`
 
-This is the evidence ledger for the reliability-hardening branch. Code changes are not accepted as evidence by themselves. The branch went through repeated audit -> repair -> rerun loops, including failures in hardening code and in the verification harness itself.
+This is the evidence ledger for the reliability-hardening branch. Code changes are not accepted as evidence by themselves. The branch went through repeated audit -> repair -> rerun loops, including failures in hardening code, parser invariants, verification tooling, and now release-packaging review.
 
 ## Current architecture contract
 
@@ -15,7 +15,7 @@ Canonical GUI path:
 
 `RuntimeMainWindow` is the final release-facing QProcess/shutdown boundary. `ProductionMainWindow` owns package provenance and process-protocol guards. `HardenedMainWindow` owns staged startup and managed spawned jobs. `src/ui/main_window.py` is a compatibility/model shim and direct execution routes back through `src.main`.
 
-## Final must-have ledger
+## Reliability/runtime must-have ledger
 
 | Must-have | Status | Evidence |
 | --- | --- | --- |
@@ -40,25 +40,21 @@ Canonical GUI path:
 | PAT edits are debounced and flushed on close | PASS | Qt close/debounce coverage passed on Windows. |
 | HTTPS redirects/body/credentials are bounded | PASS | Native remote-version suite plus transport tests passed. |
 | Session/crash diagnostics are installed | PASS | Session IDs, rotating logs, exception hooks, faulthandler and clean-exit path are present and GUI smoke passed. |
-| Runtime/dev/build dependencies are separated/bounded | PASS | Requirements split and dependency versions recorded by Windows verifier. |
-| Packaged build is reproducible | PASS | Both one-file artifacts built; packaged CLI and GUI smoke passed. |
 | No tracked bytecode / no required GitHub Actions | PASS | Final tree/diff inspection; no CI workflow required. |
 
 ## Audit-host exact-blob evidence
 
-Before Windows acceptance, current branch files were reconstructed from GitHub and checked with `git hash-object` before execution.
-
-Fresh final audit-host results:
+Before native acceptance, current application blobs were reconstructed from GitHub and checked with `git hash-object` before execution.
 
 - executor / selector / decoder / bounded command-runner gate: **50 passed**;
 - strict localized Winget parser gate: **15 passed**;
-- total exact-current-blob tests: **65 passed**.
+- total exact-current application-logic blob tests: **65 passed**.
 
-The parser gate initially failed 14/15 after a new Unicode boundary invariant proved too strict for a legitimate German truncated-ID fixture. The invariant was corrected, the Git blob reverified, and the entire parser suite reran 15/15.
+The parser gate initially failed 14/15 after a Unicode boundary invariant proved too strict for a legitimate German truncated-ID fixture. The invariant was corrected, the Git blob reverified, and the entire parser suite reran 15/15.
 
-## Native Windows acceptance — PASS
+## Native Windows application acceptance — PASS
 
-Acceptance environment:
+Accepted environment:
 
 - Windows `10.0.26200.9278`;
 - Python `3.12.10`;
@@ -73,34 +69,7 @@ Acceptance environment:
 - PyInstaller `6.22.2`;
 - Winget `v1.29.290`.
 
-### First Windows run
-
-`python scripts\verify_windows.py --live-winget --build`
-
-Passed:
-
-- compile all Python sources;
-- Ruff correctness checks;
-- native lifecycle integration: **19 passed**;
-- complete pytest suite: **180 passed**;
-- source CLI smoke;
-- real `winget --version`;
-- real read-only Winget update scan;
-- PyInstaller GUI + CLI builds;
-- packaged CLI smoke;
-- packaged GUI create/close smoke.
-
-One check failed before importing application code: direct execution of `scripts/smoke_gui.py` did not put the repository root on `sys.path`. That verification-harness defect was fixed and a source-contract regression test was added.
-
-### Final Windows rerun
-
-After pulling the smoke-harness repair:
-
-`python scripts\smoke_gui.py` -> **PASS**
-
-`python scripts\verify_windows.py --live-winget` -> **ALL REQUESTED CHECKS PASSED**
-
-Final rerun details:
+Final accepted application rerun:
 
 - compile all Python sources: **PASS**;
 - Ruff correctness checks: **PASS**;
@@ -112,44 +81,80 @@ Final rerun details:
 - real read-only Winget update scan: **PASS**;
 - aggregate verdict: **PASSED: all requested verification checks succeeded**.
 
-The application/build sources did not change between the successful `--build` run and the final rerun. A GitHub compare from the build-tested head `0195f6a90f4f357fbcdaf640166d7598b194614c` to the post-repair head showed only:
+The earlier PyInstaller-only build also successfully built and smoke-launched both portable executables. That evidence established the pre-installer packaging baseline.
 
-- `scripts/smoke_gui.py`;
-- `tests/test_hardened_source.py`;
-- verification documentation.
+## Post-acceptance Windows x64 installer/release tranche
 
-Therefore the previously successful packaged GUI/CLI build and packaged launch evidence remains applicable to the accepted application code.
+After the reliability runtime was accepted, the repository was extended with a formal local release/distribution pipeline. This changes packaging/build tooling, so the earlier portable-build result is not being inherited as proof of the new release bundle.
 
-## Repository-state evidence
+Added release contract:
 
-Final integrity checks require:
+- `VERSION` is the single semantic release version source; initial value: `1.0.0`;
+- PyInstaller GUI and CLI builds receive Windows version resources derived from `VERSION`;
+- `installer/WingetUniversalDashboard.iss` provides a stable Inno Setup application identity and per-user installation;
+- `SetupArchitecture=x64` requires an actual AMD64 setup loader;
+- `ArchitecturesAllowed=x64compatible` and `ArchitecturesInstallIn64BitMode=x64compatible` allow supported x64 environments including Windows 11 ARM64 x64 compatibility;
+- the GUI executable, CLI executable, and generated setup executable are all checked as AMD64 PE (`0x8664`) before acceptance;
+- the setup installs under `%LOCALAPPDATA%\Programs\WingetUniversalDashboard`, creates a Start Menu shortcut, offers an optional desktop shortcut, and registers an Inno uninstaller;
+- release output is `WingetUniversalDashboard-Setup-x64.exe` plus portable GUI/CLI and `SHA256SUMS.txt`;
+- optional Authenticode signing uses `signtool`, SHA-256 and an RFC3161 timestamp without storing certificate secrets in the repository;
+- `publish_release.py` uses authenticated local `gh`, refuses a dirty worktree, refuses non-`master` publication by default, refuses overwriting an existing version, targets the exact current commit, uploads all four assets, and creates a draft release unless `--publish` is explicitly supplied;
+- no GitHub Actions workflow is required.
 
-- branch remains ahead of `master` with `behind_by: 0`;
-- merge base remains `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`;
-- no GitHub Actions workflow is introduced;
-- no tracked Python bytecode/cache artifacts are reintroduced;
-- the draft PR remains mergeable after final documentation commits.
+### Release-tooling audit evidence
 
-## Residuals / follow-up opportunities
+The release-tooling contract was tested locally before commit and then reread from the committed branch. The pure tooling suite passed **11/11** before the final metadata correction. The final committed version/installer assertions were rerun after the correction and passed, including:
 
-No known release-blocking reliability defect remains open from this audit.
+- stable semantic version parses to numeric `major.minor.patch.0` metadata;
+- prerelease text such as `1.2.3-rc.1` remains human-readable while Win32 numeric version fields remain numeric;
+- invalid version forms fail closed;
+- stable installer `AppId` is retained;
+- `SetupArchitecture=x64` is present;
+- x64-compatible install-mode directives are present;
+- per-user/no-elevation installation is present;
+- `VersionInfoVersion` and `VersionInfoProductVersion` use the numeric version while `VersionInfoProductTextVersion` preserves semantic text;
+- release builder emits installer + SHA-256 manifest;
+- publisher defaults to a draft and requires a clean `master` worktree;
+- installer smoke uses a temporary install directory and removes the installed binaries afterward.
 
-Two intentionally conservative boundaries remain documented:
+The release audit itself found and repaired two defects before native acceptance:
 
-- HTTPS safety is not DNS/IP-level private-network SSRF isolation. Adding robust hostname resolution and private/link-local destination policy should be a separate networking hardening change, not a string blacklist.
-- Unknown localized no-update prose without a table fails closed unless it matches a known marker. This is preferable to falsely reporting zero updates until Winget exposes a structured upgrade result.
+1. `x64compatible` alone would install x64 payloads but Inno Setup 7 would still emit its default x86 setup loader. `SetupArchitecture=x64` was added and the generated setup PE is now mechanically required to be AMD64.
+2. semantic prerelease text was initially placed into Inno's numeric `VersionInfoProductVersion`. The installer now uses numeric product/file versions and separate semantic `VersionInfoProductTextVersion`.
 
-The earlier note claiming a failed batch could visibly end with `Update complete.` was removed after the final call-chain audit showed `set_ui_busy(..., busy=False, ...)` resets the visible status to `Ready`; the status argument is not displayed on that path.
+### New native installer acceptance — PENDING
 
-## Final verdict
+The new release/package code modifies `scripts/build_windows.py` and adds the Inno installer. It therefore requires a fresh Windows packaging gate before this extended branch is merged/released.
 
-- implementation/static/pure-Python audit: **PASS**;
-- native Windows acceptance: **PASS**;
-- complete Windows pytest suite: **181/181 PASS**;
+Install current Inno Setup 7 once if it is not installed:
+
+```powershell
+winget install --id JRSoftware.InnoSetup.7 -e -s winget -i
+```
+
+Then, after pulling the current audit branch, run:
+
+```powershell
+python scripts\verify_windows.py --live-winget --installer
+```
+
+`--installer` performs the ordinary deterministic/native gate, rebuilds versioned AMD64 PyInstaller GUI/CLI artifacts, compiles the true x64 Inno setup, smokes the portable artifacts, silently installs the setup into a temporary per-user directory, launches the installed GUI/CLI, silently uninstalls it, and verifies application binaries were removed.
+
+## Residual follow-up opportunities
+
+No known release-blocking application reliability defect remains open from the original audit.
+
+Two conservative application boundaries remain suitable for future work:
+
+- HTTPS safety is not DNS/IP-level private-network SSRF isolation. A correct solution should resolve destinations and enforce private/link-local policy rather than use string blacklists.
+- Unknown localized no-update prose without a table fails closed unless it matches a known marker. This is preferable to falsely claiming zero updates until Winget exposes a structured upgrade result.
+
+## Current verdict
+
+- implementation/static/pure-Python application audit: **PASS**;
+- native Windows application acceptance: **PASS**;
+- complete accepted Windows application pytest suite: **181/181 PASS**;
 - real read-only Winget integration: **PASS**;
-- packaged Windows build: **PASS**;
-- packaged CLI smoke: **PASS**;
-- packaged GUI smoke: **PASS**;
-- release recommendation: **READY TO MERGE**.
-
-Manual crash-boundary exercises in `WINDOWS-VERIFICATION.md` remain useful optional exploratory checks, but the deterministic/native acceptance gate and packaged smoke gate have passed.
+- release/installer static/pure tooling audit: **PASS**;
+- true Windows x64 installer build/install/uninstall acceptance: **PENDING**;
+- merge/release recommendation: **HOLD ONLY UNTIL THE NEW INSTALLER GATE PASSES**.
