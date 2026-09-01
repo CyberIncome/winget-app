@@ -105,12 +105,15 @@ def test_github_rate_limit_falls_back_to_latest_tag(monkeypatch):
     )
 
 
-def test_generic_https_release_page_detects_newer_version(monkeypatch):
+def test_generic_release_page_chooses_highest_newer_version(monkeypatch):
     monkeypatch.setattr(
         remote_versions,
         "safe_get",
         lambda *_args, **_kwargs: FakeResponse(
-            text="Current release: v4.2.1",
+            text=(
+                "Historical releases: v4.1.1, v4.3.0, v4.2.9, "
+                "current v4.10.0"
+            ),
         ),
     )
 
@@ -119,7 +122,7 @@ def test_generic_https_release_page_detects_newer_version(monkeypatch):
             "https://vendor.example/releases",
             "4.1.0",
         )
-        == "4.2.1"
+        == "4.10.0"
     )
 
 
