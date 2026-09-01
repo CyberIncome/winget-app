@@ -104,9 +104,10 @@ def run_command(
         process_environment["COLUMNS"] = "300"
 
     try:
-        with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
-            mode="w+b"
-        ) as stderr_file:
+        with (
+            tempfile.TemporaryFile(mode="w+b") as stdout_file,
+            tempfile.TemporaryFile(mode="w+b") as stderr_file,
+        ):
             process = subprocess.Popen(
                 normalized,
                 stdout=stdout_file,
@@ -119,7 +120,7 @@ def run_command(
             except subprocess.TimeoutExpired:
                 timed_out = True
                 _stop_timed_out_process(process)
-                returncode = process.poll()
+                returncode = None
 
             stdout, stdout_overflow = _read_capture(
                 stdout_file, MAX_CAPTURE_BYTES
