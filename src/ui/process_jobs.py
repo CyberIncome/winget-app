@@ -11,6 +11,9 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
+_PROCESS_STATE_ERRORS = (AssertionError, OSError, ValueError)
+
+
 class ManagedProcessJob(QObject):
     """Own one spawned child process and poll it from the Qt event loop."""
 
@@ -46,12 +49,18 @@ class ManagedProcessJob(QObject):
         return bool(
             not self._done
             and self._process is not None
-            and self._process.is_alive()
+            and self._is_alive(self._process)
         )
 
     @property
     def pid(self) -> int | None:
-        return self._process.pid if self._process is not None else None
+        process = self._process
+        if process is None:
+            return None
+        try:
+            return process.pid
+        except _PROCESS_STATE_ERRORS:
+            return None
 
     def start(self) -> bool:
         if self._process is not None:
@@ -83,6 +92,8 @@ class ManagedProcessJob(QObject):
             return
 
         envelope = self._read_envelope_nowait()
+        if self._done:
+            return
         if envelope is not None:
             self._consume_envelope(envelope)
             return
@@ -97,10 +108,10 @@ class ManagedProcessJob(QObject):
             return
 
         process = self._process
-        if process is None or process.is_alive():
+        if process is None or self._is_alive(process):
             return
 
-        exit_code = process.exitcode
+        exit_code = self._exit_code(process)
         envelope = self._read_envelope_wait(0.05)
         if envelope is not None:
             self._consume_envelope(envelope)
@@ -131,8 +142,13 @@ class ManagedProcessJob(QObject):
         except (Empty, EOFError, OSError, ValueError):
             return None
 
-    def _consume_envelope(self, envelope: dict) -> None:
+    def _consume_envelope(self, envelope) -> None:
         if self._done:
+            return
+        if not isinstance(envelope, dict):
+            self._finish_failure(
+                f"{self.name} returned an invalid result envelope"
+            )
             return
         if envelope.get("ok"):
             value = envelope.get("value")
@@ -179,51 +195,107 @@ class ManagedProcessJob(QObject):
         self.failed.emit(self.name, message)
         self.finished.emit(self.name)
 
+    def _is_alive(self, process) -> bool:
+        try:
+            return bool(process.is_alive())
+        except _PROCESS_STATE_ERRORS as exc:
+            self._logger.warning(
+                "JOB STATE CHECK FAILED name=%s detail=%s", self.name, exc
+            )
+            return False
+
+    def _exit_code(self, process):
+        try:
+            return process.exitcode
+        except _PROCESS_STATE_ERRORS:
+            return None
+
+    def _join(self, process, timeout: float) -> None:
+        try:
+            process.join(timeout=timeout)
+        except _PROCESS_STATE_ERRORS as exc:
+            self._logger.warning(
+                "JOB JOIN FAILED name=%s detail=%s", self.name, exc
+            )
+
+    def _terminate(self, process) -> None:
+        try:
+            process.terminate()
+        except _PROCESS_STATE_ERRORS as exc:
+            self._logger.warning(
+                "JOB TERMINATE FAILED name=%s detail=%s", self.name, exc
+            )
+
+    def _kill(self, process) -> None:
+        try:
+            process.kill()
+        except _PROCESS_STATE_ERRORS as exc:
+            self._logger.error(
+                "JOB KILL FAILED name=%s detail=%s", self.name, exc
+            )
+
+    def _close_process(self, process) -> None:
+        try:
+            process.close()
+        except _PROCESS_STATE_ERRORS as exc:
+            self._logger.debug(
+                "JOB CLOSE FAILED name=%s detail=%s", self.name, exc
+            )
+
     def _cleanup_process(
         self,
         terminate: bool = False,
         grace_seconds: float = 0.2,
     ) -> None:
-        """Boundedly stop/close the process and its result queue."""
+        """Boundedly stop/close the process and its result queue.
+
+        Cleanup is intentionally exception-contained. A Windows process handle
+        can change state while the GUI is closing; cleanup failures are logged
+        and escalation continues rather than escaping into ``closeEvent``.
+        """
         self._timer.stop()
         process = self._process
         if process is not None:
-            # Process.start itself can fail. An unstarted Process has no pid
-            # and Python raises AssertionError if it is joined/is_alive.
-            if process.pid is not None:
-                if terminate and process.is_alive():
-                    process.terminate()
-                process.join(timeout=grace_seconds)
-                if process.is_alive():
+            pid = self.pid
+            if pid is not None:
+                if terminate and self._is_alive(process):
+                    self._terminate(process)
+                self._join(process, grace_seconds)
+                if self._is_alive(process):
                     self._logger.warning(
                         "JOB LINGER TERMINATE name=%s pid=%s",
                         self.name,
-                        process.pid,
+                        pid,
                     )
-                    process.terminate()
-                    process.join(timeout=0.5)
-                if process.is_alive():
+                    self._terminate(process)
+                    self._join(process, 0.5)
+                if self._is_alive(process):
                     self._logger.error(
                         "JOB FORCE KILL name=%s pid=%s",
                         self.name,
-                        process.pid,
+                        pid,
                     )
-                    process.kill()
-                    process.join(timeout=1.0)
-                try:
-                    process.close()
-                except (OSError, ValueError):
-                    pass
+                    self._kill(process)
+                    self._join(process, 1.0)
+            self._close_process(process)
             self._process = None
 
         queue = self._queue
         if queue is not None:
             try:
                 queue.close()
-            except (OSError, ValueError):
-                pass
+            except (OSError, ValueError) as exc:
+                self._logger.debug(
+                    "JOB QUEUE CLOSE FAILED name=%s detail=%s",
+                    self.name,
+                    exc,
+                )
             try:
                 queue.cancel_join_thread()
-            except (AttributeError, OSError, ValueError):
-                pass
+            except (AttributeError, OSError, ValueError) as exc:
+                self._logger.debug(
+                    "JOB QUEUE CANCEL JOIN FAILED name=%s detail=%s",
+                    self.name,
+                    exc,
+                )
             self._queue = None
