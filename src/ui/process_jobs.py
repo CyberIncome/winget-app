@@ -11,7 +11,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
-_PROCESS_STATE_ERRORS = (AssertionError, OSError, ValueError)
+_PROCESS_STATE_ERRORS = (AssertionError, AttributeError, OSError, ValueError)
 
 
 class ManagedProcessJob(QObject):
@@ -262,39 +262,39 @@ class ManagedProcessJob(QObject):
         can change state while the GUI is closing; cleanup failures are logged
         and escalation continues rather than escaping into ``closeEvent``.
         An unknown liveness state is treated as possibly alive so cleanup still
-        escalates instead of leaving a child behind.
+        escalates instead of leaving a child behind. PID availability is only
+        diagnostic metadata and never gates cleanup.
         """
         self._timer.stop()
         process = self._process
         if process is not None:
             pid = self.pid
-            if pid is not None:
-                alive = self._is_alive(process)
-                if terminate and alive is not False:
-                    self._terminate(process)
-                self._join(process, grace_seconds)
+            alive = self._is_alive(process)
+            if terminate and alive is not False:
+                self._terminate(process)
+            self._join(process, grace_seconds)
 
-                alive = self._is_alive(process)
-                if alive is not False:
-                    self._logger.warning(
-                        "JOB LINGER TERMINATE name=%s pid=%s state=%s",
-                        self.name,
-                        pid,
-                        alive,
-                    )
-                    self._terminate(process)
-                    self._join(process, 0.5)
+            alive = self._is_alive(process)
+            if alive is not False:
+                self._logger.warning(
+                    "JOB LINGER TERMINATE name=%s pid=%s state=%s",
+                    self.name,
+                    pid,
+                    alive,
+                )
+                self._terminate(process)
+                self._join(process, 0.5)
 
-                alive = self._is_alive(process)
-                if alive is not False:
-                    self._logger.error(
-                        "JOB FORCE KILL name=%s pid=%s state=%s",
-                        self.name,
-                        pid,
-                        alive,
-                    )
-                    self._kill(process)
-                    self._join(process, 1.0)
+            alive = self._is_alive(process)
+            if alive is not False:
+                self._logger.error(
+                    "JOB FORCE KILL name=%s pid=%s state=%s",
+                    self.name,
+                    pid,
+                    alive,
+                )
+                self._kill(process)
+                self._join(process, 1.0)
             self._close_process(process)
             self._process = None
 
