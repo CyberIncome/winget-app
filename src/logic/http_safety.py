@@ -108,9 +108,16 @@ def safe_get(
     current = url
     request_headers = dict(kwargs.pop("headers", None) or {})
     request_params = kwargs.pop("params", None)
+    request_auth = kwargs.pop("auth", None)
+    request_cookies = kwargs.pop("cookies", None)
     kwargs.pop("allow_redirects", None)
 
     for redirect_count in range(max_redirects + 1):
+        request_kwargs = dict(kwargs)
+        if request_auth is not None:
+            request_kwargs["auth"] = request_auth
+        if request_cookies is not None:
+            request_kwargs["cookies"] = request_cookies
         response = client.get(
             current,
             headers=request_headers or None,
@@ -118,7 +125,7 @@ def safe_get(
             timeout=timeout,
             stream=True,
             allow_redirects=False,
-            **kwargs,
+            **request_kwargs,
         )
         try:
             location = (
@@ -137,9 +144,16 @@ def safe_get(
                         f"unsafe redirect rejected: "
                         f"{current!r} -> {target!r}"
                     )
+                cross_origin = _origin(current) != _origin(target)
                 _strip_cross_origin_headers(
                     request_headers, current, target
                 )
+                if cross_origin:
+                    # Requests will otherwise forward explicit auth/cookie
+                    # kwargs on the next manual redirect hop even though the
+                    # destination origin changed.
+                    request_auth = None
+                    request_cookies = None
                 response.close()
                 current = target
                 # Redirect Location is now authoritative; avoid re-appending
