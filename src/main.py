@@ -149,7 +149,7 @@ def main():
     )
 
     from PySide6.QtWidgets import QApplication
-    from src.ui.production_window import ProductionMainWindow
+    from src.ui.runtime_window import RuntimeMainWindow
 
     app = QApplication.instance()
     if not app:
@@ -162,7 +162,7 @@ def main():
         with open(qss_path, "r", encoding="utf-8") as file_handle:
             app.setStyleSheet(file_handle.read())
 
-    window = ProductionMainWindow()
+    window = RuntimeMainWindow()
     window.show()
 
     if "pytest" in sys.modules:
