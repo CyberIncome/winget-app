@@ -1,72 +1,114 @@
 # Reliability Hardening Verification
 
-Status: IMPLEMENTATION/STATIC AUDIT COMPLETE — NATIVE WINDOWS ACCEPTANCE PENDING
+Status: **IMPLEMENTATION / STATIC / PURE-PYTHON AUDIT COMPLETE — NATIVE WINDOWS ACCEPTANCE PENDING**
 
-This file is the evidence ledger for `audit/ferrox-reliability-hardening`.
+Branch: `audit/ferrox-reliability-hardening`
+Base: `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`
 
-## Evidence rules
+This is the evidence ledger for the reliability-hardening branch. Code changes are not accepted as evidence by themselves. A changed blob must either earn fresh executable/static evidence or remain explicitly `WINDOWS-VERIFY` when the required boundary cannot be exercised on the audit host.
 
-- Implementation claims are not accepted merely because code changed.
-- Each must-have resolves to `VERIFIED`, `FAILED`, or `WINDOWS-VERIFY`.
-- `WINDOWS-VERIFY` is used only where the current environment cannot exercise a Windows/Qt/WinGet boundary honestly.
-- Any `FAILED` must-have blocks merge.
-- `WINDOWS-VERIFY` is not a failure, but it does block describing the branch as release-accepted until the local Windows gate passes.
+## Current architecture contract
+
+Canonical GUI path:
+
+`launcher.py -> src.main.main() -> RuntimeMainWindow -> ProductionMainWindow -> HardenedMainWindow -> historical MainWindow presentation`
+
+`RuntimeMainWindow` is the final release-facing QProcess/shutdown boundary. `ProductionMainWindow` owns package provenance and process-protocol guards. `HardenedMainWindow` owns staged startup and managed spawned jobs. `src/ui/main_window.py` is a compatibility/model shim and direct execution routes back through `src.main`.
 
 ## Must-have ledger
 
 | Must-have | Status | Evidence |
 | --- | --- | --- |
-| No untracked production daemon threads | VERIFIED | Canonical GUI route is `src.main` -> `ProductionMainWindow`; legacy direct execution routes back through `src.main`. Production overrides every legacy method containing `threading.Thread`; `tests/test_thread_override_contract.py` encodes this invariant. |
-| Owned jobs have timeout/cancellation/cleanup | VERIFIED | `ManagedProcessJob` owns spawned children, polls through Qt, has a hard timeout, and performs terminate/join/kill/close plus queue cleanup. Worker-envelope tests are committed in `tests/test_worker_jobs.py`. |
-| Shutdown terminates owned children | WINDOWS-VERIFY | `HardenedMainWindow.closeEvent` cancels all managed jobs and boundedly terminates/kills active `QProcess` work; native Windows spawn/QProcess behavior must be exercised locally. |
-| Startup is staged | VERIFIED | Hardened startup sequences refresh -> parse -> inventory -> detective -> API instead of overlapping every heavyweight subsystem at launch. |
-| Winget outcomes are distinguished | WINDOWS-VERIFY | Production/hardened handlers separately track FailedToStart, CrashExit, hard timeout, normal non-zero exit, and success; Qt signal ordering needs native verification. |
-| Crash/timeout does not trigger silent retry | WINDOWS-VERIFY | Retry predicate excludes crash/timeout; `tests/test_production_ui.py` contains explicit CrashExit coverage. |
-| Watchdog hard deadline is not output-idle kill | VERIFIED | Hard timeout is based on elapsed start time; idle output only emits a warning. |
-| Batch returns to idle | WINDOWS-VERIFY | All normal/error terminal paths clear operation/busy state in source; real QProcess signal sequencing remains Windows/Qt evidence. |
-| Parser fails explicitly on malformed tables | VERIFIED | Pure-Python adversarial assertions passed for missing headers/separators, partial malformed rows, unexplained empty tables, and unrecognized error output. |
-| Parser validates columns / optional Source | VERIFIED | Pure-Python parser assertions passed for standard output and output without the optional Source column. |
-| Uncertain versions remain safe | VERIFIED | Strict enrichment preserves unknown/approximate installed versions from unsafe local filtering; dedicated parser tests are committed. |
-| Package/source provenance is preserved | VERIFIED | Current Microsoft WinGet docs confirm `--source` disambiguation; executor assertions passed with source-specific commands; production selection/dedup/removal keys include source. |
-| Registry IDs are not Winget provenance | VERIFIED | Final source review removed registry-ID matching entirely; `tests/test_inventory_mapping.py` contains a deliberate wrong-ID collision and requires unique exact name mapping. |
-| Config defaults deep copied | VERIFIED | Pure-Python config assertions passed; nested values are copied on initialization/get. |
-| Config writes atomic | VERIFIED | Pure-Python config assertions passed for temp-file + fsync + replace behavior and corrupt-file quarantine. |
-| PAT writes debounced | WINDOWS-VERIFY | Production uses an 800 ms Qt debounce and flushes pending PAT state on close; keyring/Qt behavior needs Windows acceptance. |
-| Redirect targets constrained | VERIFIED | HTTPS/credential URL validation, redirect limits, body caps, cross-origin secret-header stripping, and cross-origin `auth=`/`cookies=` stripping passed executable fake-transport assertions. |
-| Session/lifecycle diagnostics | WINDOWS-VERIFY | Session IDs, process/job lifecycle logs, Python/thread exception hooks, and native faulthandler output are present; crash-log production requires Windows execution. |
-| Clean-exit marker | WINDOWS-VERIFY | Clean-close source path logs `SESSION CLEAN EXIT`; `scripts/smoke_gui.py` is included in the Windows gate. |
-| Bytecode/cache artifacts removed | VERIFIED | Final recursive Git tree inspection found no tracked `__pycache__` or `.pyc` entries; ignore rules cover future caches. |
-| Dependencies split/constrained | VERIFIED | Runtime and dev requirements are separate and bounded; the constrained families were checked against current package releases during the audit. |
-| No CI workflow required | VERIFIED | Final tree contains no `.github/workflows`; verification is intentionally local because CI minutes are unavailable. |
+| No untracked production daemon threads | VERIFIED | Production inheritance overrides the legacy thread-launch paths; static contract test enumerates them. |
+| Spawned jobs have timeout/cancel/cleanup | VERIFIED + WINDOWS-VERIFY integration | `ManagedProcessJob` uses owned spawn processes, one-result envelopes, bounded timeout, terminate/join/kill/close escalation, and queue cleanup. Native spawn acceptance remains Windows-specific. |
+| Final shutdown contains child/process teardown failures | WINDOWS-VERIFY | `RuntimeMainWindow` contains state/terminate/wait/kill failures and cancels managed jobs; hostile-QProcess tests and real Windows close-during-spawn tests are committed. |
+| Startup is staged | VERIFIED | refresh -> parse -> inventory -> detective -> API. |
+| QProcess outcomes are distinct | WINDOWS-VERIFY | FailedToStart, CrashExit, watchdog timeout, normal non-zero failure, and success have separate state paths; native signal ordering remains Windows evidence. |
+| Crash/timeout never becomes silent retry | WINDOWS-VERIFY | Retry predicate permits only normal non-zero installer failure; native tests cover crash/kill/timeout. |
+| Watchdog does not kill only because output is quiet | VERIFIED | Idle time only logs; hard termination uses total elapsed deadline. |
+| Foreground operations are mutually excluded | VERIFIED + WINDOWS-VERIFY UI | Production blocks overlapping refresh/inventory/update foreground requests; Qt interaction is covered by committed tests. |
+| Refresh protocol output is bounded and fail-closed | VERIFIED + WINDOWS-VERIFY QProcess | GUI retains at most 5 MiB authoritative stdout bytes; read/overflow invalidates the scan instead of parsing a truncated table. |
+| Live console memory is bounded | VERIFIED + WINDOWS-VERIFY Qt | Canonical runtime retains 2,000 console blocks and production bounds a never-terminated live line to 16 KiB. |
+| CLI captured output is bounded | VERIFIED | Disk-backed stdout/stderr capture, 5 MiB per stream, overflow is explicit non-success. |
+| Malformed/partial Winget tables fail closed | VERIFIED | Current exact parser test blob passes malformed, partial, empty, localized and Unicode-width cases. |
+| Localized/CJK table layout is handled safely | VERIFIED | Display-cell parser passes German and CJK fixtures and rejects a simulated ambiguous-width boundary shift. |
+| Package/source provenance is retained | VERIFIED + WINDOWS-VERIFY Qt | Source participates in checkbox identity, refs, deduplication, exact commands and row removal. |
+| Registry inventory IDs are never Winget authority | VERIFIED | Inventory update mapping ignores registry IDs and requires a unique authoritative Winget-name match. |
+| Detective-only findings cannot become update authority | VERIFIED + WINDOWS-VERIFY Qt | Detective rows are tagged informational and excluded from executable refs unless independently backed by current Winget output. |
+| Package selectors reject ambiguous/control values | VERIFIED | IDs reject truncation, leading dash, ASCII controls and invalid grammar; names/sources reject option-like/control values. |
+| Config defaults/writes are safe | VERIFIED by unchanged validated blobs | Deep-copy state, atomic temp+fsync+replace, corrupt quarantine and guarded PAT migration. |
+| PAT edits are debounced and flushed on close | WINDOWS-VERIFY | Qt debounce plus final runtime close flush; credential-store behavior needs Windows. |
+| HTTPS redirects/body/credentials are bounded | VERIFIED by unchanged validated blobs | HTTPS-only absolute URLs, redirect/body caps, cross-origin secret header/auth/cookie stripping. |
+| Session/crash diagnostics exist | WINDOWS-VERIFY | Session IDs, rotating logs, exception hooks and faulthandler are implemented; native crash production requires Windows. |
+| Runtime/dev/build dependencies are separated and bounded | VERIFIED | `requirements.txt` and `requirements-dev.txt`; PyInstaller is dev-only. |
+| Packaged build is reproducible from repo tooling | WINDOWS-VERIFY | `scripts/build_windows.py` creates GUI/CLI one-file artifacts and `verify_windows.py --build` launch-smokes both. |
+| No tracked bytecode / no required GitHub Actions | VERIFIED | Recursive tree/diff inspection; caches removed/ignored and no workflow is required. |
 
-## Executed deterministic evidence in this environment
+## Fresh current-blob executable evidence — 2026-09-01
 
-The current environment has Python/pytest/click/requests but no PySide6, pywin32 Windows runtime, real Winget, or outbound shell DNS. GitHub repository contents were therefore read through the connected repository API while executable pure-Python behaviors were rerun locally from the exact fetched branch source.
+The audit host cannot access GitHub through shell DNS, so current branch files were read through the connected GitHub repository interface, reconstructed locally, and checked with `git hash-object` before execution.
 
-Passed during the final verification loop:
+Current source blobs reconstructed and hash-matched exactly:
 
-- executor selector/source construction and adversarial control-character validation;
-- strict Winget table parsing, including malformed/partial/empty-table failures;
-- structured command execution: successful output, explicit non-zero exit, timeout, start failure, and forced `COLUMNS=300`;
-- configuration deep-copy, atomic replace, corrupt quarantine, PAT migration success, and migration-failure preservation;
-- HTTPS URL validation, redirect bounding, body-size cap, secret-header stripping, and the newly added `auth=`/`cookies=` cross-origin stripping;
-- branch/tree hygiene inspection;
-- commit self-diffs after large-file replacement to prove unrelated content was not lost.
+- `src/logic/executor.py` -> `63447020d4cfb66188af63290763ff52d0ea3ba3`
+- `src/logic/output_decode.py` -> `a0301c0419b4ed01742b85501a2b0572bbea40bf`
+- `src/logic/command_runner.py` -> `530c9b0ef766032e226ce69e6b9c6163c6cd5f4e`
+- `src/logic/upgrade_parser.py` -> `edc4f1b0712eada3388a96401a1a17505557759c`
 
-One verification loop intentionally failed before the final pass: selector validation accepted a newline-adjacent case because of the original regex/end-trimming semantics. That implementation was repaired, regression coverage was added, and the executor gate was restarted and passed. The failed run is preserved as evidence that completion was not accepted blindly.
+Current test blobs hash-matched exactly before execution:
+
+- `tests/test_executor.py` -> `3d49f0a432189c822306133416563c02612230b3`
+- `tests/test_executor_controls.py` -> `4042346eedf233243e84868417b4be9383beeccd`
+- `tests/test_output_decode.py` -> `fc9d5ecb83b611866e5bb5444032c886208b9988`
+- `tests/test_command_runner.py` -> `5393150961bd0d856ca24d4d70a33209938c5051`
+- `tests/test_upgrade_parser.py` -> `13aa9c28e1d174f0fd7e2148ab1e3d5da1e7ccfd`
+
+Fresh results:
+
+- executor / selector / decoder / bounded command-runner gate: **50 passed**;
+- strict localized Winget parser gate after final repair: **15 passed**;
+- total fresh exact-current-blob tests in the final loop: **65 passed**.
+
+The final parser gate was intentionally **not** green on its first run: 14 passed / 1 failed because an over-strict new column-boundary invariant rejected the legitimate German truncated-ID fixture. The invariant was repaired to reject only boundaries that split two adjacent non-space characters. The updated parser source hash matched GitHub and the full exact parser suite then passed 15/15. This failure/repair is retained as verification evidence rather than hidden.
+
+Earlier pure-Python config and HTTP gates remain applicable because those source/test blobs did not change afterward; the final tree SHA continuity check confirmed those validated modules were unchanged.
+
+## Repository-state evidence
+
+A final branch-vs-master comparison reported:
+
+- branch status: ahead of `master`;
+- `behind_by: 0`;
+- merge base remains `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`;
+- no GitHub Actions workflow added;
+- tracked Python bytecode/cache artifacts removed;
+- major apparent UI/parser deletions are compatibility moves into `legacy_window.py` / `legacy_parser.py`, not discarded functionality.
+
+## Known non-blocking residuals
+
+These are recorded rather than silently expanded into late risky rewrites:
+
+- A batch containing one or more final package failures can still end with the generic status text `Update complete.` after the individual failures were correctly logged. This is a reporting/usability defect, not a targeting or lifecycle failure; failed rows are not removed as successes.
+- The bounded HTTPS policy is not full SSRF isolation. It rejects unsafe schemes, credentials and unsafe redirects, but does not resolve hostnames and deny private/link-local destination IPs. A correct DNS/IP-aware policy should be a separate networking hardening change rather than a string blacklist.
+- Localized no-update messages are recognized only for known English markers. Unknown localized no-update prose fails closed instead of claiming zero updates. This favors correctness over convenience until Winget exposes a structured upgrade result.
 
 ## Required Windows acceptance
 
-Run on the target Windows machine from this exact branch:
+From this exact branch on Windows:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
-python scripts\verify_windows.py --live-winget
+python scripts\verify_windows.py --live-winget --build
 ```
 
-The deterministic Windows gate compiles all Python sources, runs Ruff correctness checks, executes the complete pytest/pytest-qt suite, verifies CLI import, creates/shows/cleanly closes the real production Qt window, checks the Winget executable, and performs a read-only live update scan.
+Then complete the manual crash-boundary checks in `WINDOWS-VERIFICATION.md`.
 
-The manual crash-boundary scenarios in `WINDOWS-VERIFICATION.md` should then be exercised. Until that succeeds, merge/release status remains **HOLD FOR WINDOWS ACCEPTANCE** even though no implementation/static audit failure is currently open.
+Until that succeeds:
+
+- implementation/static/pure-Python audit: **PASS**;
+- native Windows acceptance: **PENDING**;
+- packaged Windows acceptance: **PENDING**;
+- merge/release recommendation: **HOLD FOR WINDOWS ACCEPTANCE**.
