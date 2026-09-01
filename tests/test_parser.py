@@ -1,12 +1,14 @@
 import pytest
+
 from src.logic.parser import (
-    check_remote_version,
-    parse_winget_upgrade,
-    is_version_newer,
-    is_valid_version,
-    parse_version_tuple,
     _is_safe_url,
+    check_remote_version,
+    is_valid_version,
+    is_version_newer,
+    parse_version_tuple,
+    parse_winget_upgrade,
 )
+from src.logic.upgrade_parser import WingetParseError
 
 
 class FakeResponse:
@@ -21,7 +23,7 @@ class FakeResponse:
         return self._json_data
 
 
-def test_parse_winget_upgrade_standard():
+def test_parse_winget_upgrade_standard_uses_strict_contract():
     sample_output = """Name                           Id                           Version          Available        Source
 ------------------------------------------------------------------------------------------------------
 Google Chrome                  Google.Chrome                120.0.6099.110   120.0.6099.130   winget
@@ -34,20 +36,17 @@ Microsoft Visual Studio Code   Microsoft.VisualStudioCode   1.85.1           1.8
     assert results[0]["Id"] == "Google.Chrome"
     assert results[0]["Version"] == "120.0.6099.110"
     assert results[0]["Available"] == "120.0.6099.130"
-    assert "Source" not in results[0]
-
+    assert results[0]["Source"] == "winget"
     assert results[1]["Id"] == "Microsoft.VisualStudioCode"
 
 
 def test_parse_winget_upgrade_no_updates():
-    sample_output = "No applicable update found."
-    results = parse_winget_upgrade(sample_output)
-    assert results == []
+    assert parse_winget_upgrade("No applicable update found.") == []
 
 
-def test_parse_winget_upgrade_empty():
-    results = parse_winget_upgrade("")
-    assert results == []
+def test_parse_winget_upgrade_empty_fails_closed():
+    with pytest.raises(WingetParseError, match="empty output"):
+        parse_winget_upgrade("")
 
 
 def test_parse_winget_upgrade_with_unknown():
@@ -55,7 +54,7 @@ def test_parse_winget_upgrade_with_unknown():
 ------------------------------------------------------------------------------------------------------
 Some App                       Some.App                     unknown          1.2.3            winget
 """
-    results = parse_winget_upgrade(sample_output)
+    results = parse_winget_upgrade(sample_output, reg_data=[])
     assert len(results) == 1
     assert results[0]["Version"] == "unknown"
 
@@ -82,58 +81,62 @@ MEGAsync                       Mega.MEGASync                < 6.3.0.1        6.3
     assert results[0]["Version"] == "< 6.3.0.1"
 
 
-def test_check_remote_version_github_skips_release_page_text(monkeypatch):
+def test_check_remote_version_facade_uses_hardened_detector(monkeypatch):
     responses = {
-        "https://api.github.com/repos/GNOME/gimp/releases/latest":
-            FakeResponse(
-                404,
-                "https://api.github.com/repos/GNOME/gimp/releases/latest",
-            ),
-        "https://github.com/GNOME/gimp/releases/latest":
-            FakeResponse(
-                200,
-                "https://github.com/GNOME/gimp/releases",
-                "stars 4.835 watchers 10.303",
-            ),
+        "https://api.github.com/repos/owner/repo/releases/latest": FakeResponse(
+            404,
+            "https://api.github.com/repos/owner/repo/releases/latest",
+        ),
+        "https://github.com/owner/repo/releases/latest": FakeResponse(
+            200,
+            "https://github.com/owner/repo/releases/tag/v2.0.1",
+        ),
     }
 
     def fake_safe_get(url, **kwargs):
         return responses[url]
 
-    monkeypatch.setattr("src.logic.parser._safe_get", fake_safe_get)
+    monkeypatch.setattr("src.logic.remote_versions.safe_get", fake_safe_get)
 
-    assert check_remote_version(
-        "https://github.com/GNOME/gimp/releases",
-        installed_version="2.10.38",
-    ) is None
+    assert (
+        check_remote_version(
+            "https://github.com/owner/repo",
+            installed_version="2.0.0",
+        )
+        == "2.0.1"
+    )
 
 
-def test_check_remote_version_github_accepts_latest_tag(monkeypatch):
+def test_check_remote_version_facade_does_not_scrape_github_page_text(
+    monkeypatch,
+):
     responses = {
-        "https://api.github.com/repos/owner/repo/releases/latest":
-            FakeResponse(
-                404,
-                "https://api.github.com/repos/owner/repo/releases/latest",
-            ),
-        "https://github.com/owner/repo/releases/latest":
-            FakeResponse(
-                200,
-                "https://github.com/owner/repo/releases/tag/v2.0.1",
-            ),
+        "https://api.github.com/repos/GNOME/gimp/releases/latest": FakeResponse(
+            404,
+            "https://api.github.com/repos/GNOME/gimp/releases/latest",
+        ),
+        "https://github.com/GNOME/gimp/releases/latest": FakeResponse(
+            200,
+            "https://github.com/GNOME/gimp/releases",
+            "stars 4.835 watchers 10.303",
+        ),
     }
 
-    def fake_safe_get(url, **kwargs):
-        return responses[url]
+    monkeypatch.setattr(
+        "src.logic.remote_versions.safe_get",
+        lambda url, **kwargs: responses[url],
+    )
 
-    monkeypatch.setattr("src.logic.parser._safe_get", fake_safe_get)
+    assert (
+        check_remote_version(
+            "https://github.com/GNOME/gimp/releases",
+            installed_version="2.10.38",
+        )
+        is None
+    )
 
-    assert check_remote_version(
-        "https://github.com/owner/repo",
-        installed_version="2.0.0",
-    ) == "2.0.1"
 
-
-# --- Version comparison tests (was 0% coverage) ---
+# --- Version comparison compatibility ---
 
 def test_is_version_newer_basic():
     assert is_version_newer("2.0", "1.0") is True
@@ -150,7 +153,6 @@ def test_is_version_newer_multi_part():
 
 
 def test_is_version_newer_different_lengths():
-    """Shorter tuples are padded with zeros."""
     assert is_version_newer("1.1", "1.0.0.0") is True
     assert is_version_newer("1.0", "1.0.0.1") is False
 
@@ -185,18 +187,17 @@ def test_parse_version_tuple():
     assert parse_version_tuple(None) is None
 
 
-# --- C2: URL safety tests ---
+# --- Hardened URL compatibility aliases ---
 
 def test_is_safe_url_allows_https():
     assert _is_safe_url("https://example.com") is True
-    assert _is_safe_url(
-        "https://github.com/owner/repo"
-    ) is True
+    assert _is_safe_url("https://github.com/owner/repo") is True
 
 
-def test_is_safe_url_rejects_non_https():
+def test_is_safe_url_rejects_non_https_and_credentials():
     assert _is_safe_url("http://example.com") is False
     assert _is_safe_url("ftp://example.com") is False
     assert _is_safe_url("file:///etc/passwd") is False
+    assert _is_safe_url("https://user:secret@example.com") is False
     assert _is_safe_url("") is False
     assert _is_safe_url(None) is False
