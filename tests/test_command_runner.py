@@ -1,3 +1,4 @@
+import codecs
 import sys
 
 from src.logic.command_runner import run_command
@@ -72,3 +73,35 @@ def test_command_runner_allows_explicit_columns_override():
     )
     assert result.ok
     assert result.stdout.strip() == "512"
+
+
+def test_command_runner_decodes_utf16_output_after_capture():
+    text = "Name Id Version Available Source\n日本語 App"
+    payload = codecs.BOM_UTF16_LE + text.encode("utf-16-le")
+    script = (
+        "import sys; "
+        f"sys.stdout.buffer.write({payload!r}); "
+        "sys.stdout.buffer.flush()"
+    )
+
+    result = run_command([sys.executable, "-c", script], timeout=5)
+
+    assert result.ok
+    assert result.stdout == text
+
+
+def test_command_runner_decodes_nonzero_stderr_bytes():
+    text = "エラー"
+    payload = codecs.BOM_UTF16_LE + text.encode("utf-16-le")
+    script = (
+        "import sys; "
+        f"sys.stderr.buffer.write({payload!r}); "
+        "sys.stderr.buffer.flush(); "
+        "raise SystemExit(9)"
+    )
+
+    result = run_command([sys.executable, "-c", script], timeout=5)
+
+    assert result.returncode == 9
+    assert result.stderr == text
+    assert text in result.failure_summary()
