@@ -1,4 +1,4 @@
-"""Canonical runtime window with exception-contained application shutdown."""
+"""Canonical runtime window with exception-contained process boundaries."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from src.ui.production_window import ProductionMainWindow
 
 
 class RuntimeMainWindow(ProductionMainWindow):
-    """Own final teardown so Windows handle races cannot escape closeEvent."""
+    """Own final QProcess boundaries and application teardown."""
 
     def _stop_timer_safely(self, timer, label: str) -> None:
         if timer is None:
@@ -33,7 +33,7 @@ class RuntimeMainWindow(ProductionMainWindow):
         try:
             state = process.state()
         except Exception as exc:
-            self.logger.warning("QProcess state unavailable during close: %s", exc)
+            self.logger.warning("QProcess state unavailable during stop: %s", exc)
 
         if state == QProcess.NotRunning:
             return
@@ -41,13 +41,13 @@ class RuntimeMainWindow(ProductionMainWindow):
         try:
             process.terminate()
         except Exception as exc:
-            self.logger.warning("QProcess terminate failed during close: %s", exc)
+            self.logger.warning("QProcess terminate failed during stop: %s", exc)
 
         finished = False
         try:
             finished = bool(process.waitForFinished(750))
         except Exception as exc:
-            self.logger.warning("QProcess wait failed during close: %s", exc)
+            self.logger.warning("QProcess wait failed during stop: %s", exc)
 
         if finished:
             return
@@ -55,12 +55,53 @@ class RuntimeMainWindow(ProductionMainWindow):
         try:
             process.kill()
         except Exception as exc:
-            self.logger.error("QProcess kill failed during close: %s", exc)
+            self.logger.error("QProcess kill failed during stop: %s", exc)
 
         try:
             process.waitForFinished(1000)
         except Exception as exc:
-            self.logger.warning("QProcess final wait failed during close: %s", exc)
+            self.logger.warning("QProcess final wait failed during stop: %s", exc)
+
+    def _recover_synchronous_process_failure(
+        self, operation: str, boundary: str, exc: Exception
+    ) -> None:
+        """Contain a synchronous process API failure and restore a safe state."""
+        self.logger.exception(
+            "QProcess %s failed operation=%s: %s",
+            boundary,
+            operation,
+            exc,
+        )
+        self._stop_qprocess_safely()
+        self._recover_process_callback_failure(operation, boundary, exc)
+
+    def refresh_updates(self):
+        try:
+            return super().refresh_updates()
+        except Exception as exc:
+            self._recover_synchronous_process_failure(
+                "refresh", "refresh-start", exc
+            )
+            return None
+
+    def batch_update(self, package_refs):
+        try:
+            return super().batch_update(package_refs)
+        except Exception as exc:
+            self._recover_synchronous_process_failure(
+                "update", "batch-start", exc
+            )
+            return None
+
+    def check_process_timeout(self):
+        try:
+            return super().check_process_timeout()
+        except Exception as exc:
+            operation = self.current_operation or "process"
+            self._recover_synchronous_process_failure(
+                operation, "watchdog", exc
+            )
+            return None
 
     def _flush_pending_pat_safely(self) -> None:
         timer = getattr(self, "_pat_save_timer", None)
