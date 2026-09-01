@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 try:
     import keyring
@@ -32,7 +33,9 @@ class ConfigManager:
     """Manage persistent settings and the GitHub PAT credential."""
 
     _instance = None
-    _lock = threading.Lock()
+    # __new__ loads while holding this lock, and load/save can nest. RLock
+    # makes the singleton and file operations share one consistent guard.
+    _lock = threading.RLock()
     _config: dict = deepcopy(DEFAULT_CONFIG)
 
     def __new__(cls):
@@ -51,28 +54,55 @@ class ConfigManager:
             cls._config = deepcopy(DEFAULT_CONFIG)
 
     def load(self):
-        """Load config from disk, preserving defaults for missing keys."""
-        if not os.path.exists(CONFIG_FILE):
-            self.save()
-            return
+        """Load config, migrate secrets, and recover corrupt JSON."""
+        with self._lock:
+            if not os.path.exists(CONFIG_FILE):
+                self._config = deepcopy(DEFAULT_CONFIG)
+                self.save()
+                return
 
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as file_handle:
-                loaded = json.load(file_handle)
-            if not isinstance(loaded, dict):
-                raise ValueError("config root must be a JSON object")
+            try:
+                with open(
+                    CONFIG_FILE, "r", encoding="utf-8"
+                ) as file_handle:
+                    loaded = json.load(file_handle)
+                if not isinstance(loaded, dict):
+                    raise ValueError("config root must be a JSON object")
+            except Exception as exc:
+                logging.error(
+                    "Failed to load config, restoring defaults: %s", exc
+                )
+                self._config = deepcopy(DEFAULT_CONFIG)
+                self._quarantine_corrupt_config()
+                self.save()
+                return
 
+            legacy_present = "github_pat" in loaded
             legacy_pat = loaded.pop("github_pat", None)
-            if legacy_pat and keyring:
-                try:
-                    keyring.set_password(
-                        "WingetUniversalDashboard",
-                        "github_pat",
-                        legacy_pat,
+            migration_complete = legacy_present and not legacy_pat
+            if legacy_pat:
+                if keyring:
+                    try:
+                        keyring.set_password(
+                            "WingetUniversalDashboard",
+                            "github_pat",
+                            legacy_pat,
+                        )
+                        migration_complete = True
+                        logging.info(
+                            "Migrated legacy PAT to secure storage."
+                        )
+                    except Exception as exc:
+                        logging.error(
+                            "PAT migration failed; leaving the original "
+                            "config file untouched for retry: %s",
+                            exc,
+                        )
+                else:
+                    logging.warning(
+                        "Legacy PAT found but keyring is unavailable; "
+                        "leaving the original config file untouched for retry."
                     )
-                    logging.info("Migrated PAT to secure storage.")
-                except Exception as exc:
-                    logging.error("Migration failed: %s", exc)
 
             merged = deepcopy(DEFAULT_CONFIG)
             for key, value in loaded.items():
@@ -85,34 +115,56 @@ class ConfigManager:
                     DEFAULT_CONFIG["url_fallbacks"]
                 )
             self._config = merged
-        except Exception as exc:
-            logging.error(
-                "Failed to load config, using defaults: %s", exc
+
+            # Only rewrite the original file after the credential store has
+            # accepted the secret. On a migration failure the plaintext file
+            # remains unchanged so the next launch can retry without data loss.
+            if migration_complete:
+                self.save()
+
+    def _quarantine_corrupt_config(self):
+        """Move unreadable config aside before writing clean defaults."""
+        if not os.path.exists(CONFIG_FILE):
+            return
+        suffix = f"{int(time.time())}.{os.getpid()}"
+        corrupt_path = f"{CONFIG_FILE}.corrupt.{suffix}"
+        try:
+            os.replace(CONFIG_FILE, corrupt_path)
+            logging.warning(
+                "Moved corrupt config to %s", corrupt_path
             )
-            self._config = deepcopy(DEFAULT_CONFIG)
+        except OSError as exc:
+            logging.error(
+                "Could not quarantine corrupt config: %s", exc
+            )
 
     def save(self):
         """Atomically save config so interruption cannot leave partial JSON."""
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        temp_file = (
-            f"{CONFIG_FILE}.tmp.{os.getpid()}.{threading.get_ident()}"
-        )
-        try:
-            with open(temp_file, "w", encoding="utf-8") as file_handle:
-                json.dump(self._config, file_handle, indent=4)
-                file_handle.flush()
-                os.fsync(file_handle.fileno())
-            os.replace(temp_file, CONFIG_FILE)
-        except Exception as exc:
-            logging.error("Failed to save config: %s", exc)
+        with self._lock:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            temp_file = (
+                f"{CONFIG_FILE}.tmp.{os.getpid()}."
+                f"{threading.get_ident()}"
+            )
             try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except OSError:
-                pass
+                with open(
+                    temp_file, "w", encoding="utf-8"
+                ) as file_handle:
+                    json.dump(self._config, file_handle, indent=4)
+                    file_handle.flush()
+                    os.fsync(file_handle.fileno())
+                os.replace(temp_file, CONFIG_FILE)
+            except Exception as exc:
+                logging.error("Failed to save config: %s", exc)
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except OSError:
+                    pass
 
     def get(self, key, default=None):
-        return self._config.get(key, default)
+        with self._lock:
+            return deepcopy(self._config.get(key, default))
 
     def set(self, key, value):
         with self._lock:
@@ -136,6 +188,9 @@ class ConfigManager:
     def github_pat(self, value):
         """Securely store the PAT in the OS credential store."""
         if not keyring:
+            logging.warning(
+                "Cannot store GitHub PAT because keyring is unavailable."
+            )
             return
         try:
             if value:
@@ -161,4 +216,4 @@ class ConfigManager:
         value = self.get("url_fallbacks")
         if not isinstance(value, dict):
             return deepcopy(DEFAULT_CONFIG["url_fallbacks"])
-        return deepcopy(value)
+        return value
