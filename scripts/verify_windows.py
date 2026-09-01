@@ -130,6 +130,11 @@ def main() -> int:
             [sys.executable, "-m", "src.cli", "--help"],
             60,
         ),
+        (
+            "production GUI create/close smoke",
+            [sys.executable, "scripts/smoke_gui.py"],
+            60,
+        ),
     ]
 
     if args.live_winget:
