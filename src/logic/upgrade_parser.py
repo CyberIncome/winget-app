@@ -170,12 +170,15 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
 def enrich_upgrade_rows(
     rows: Iterable[dict[str, str]], reg_data: list[dict] | None = None
 ) -> list[dict[str, str]]:
-    """Apply the existing registry/version heuristics to already parsed rows."""
-    from src.logic.parser import (
-        find_version_in_registry,
-        is_version_newer,
-        parse_version_tuple,
-    )
+    """Enrich installed versions without overruling Winget upgrade authority.
+
+    Rows in this function have already been emitted by ``winget upgrade``. The
+    package manager therefore remains authoritative about whether an upgrade is
+    available. Local registry heuristics may replace an ``unknown`` installed
+    version for display, but must never discard a Winget row based on our much
+    simpler numeric version parser.
+    """
+    from src.logic.parser import find_version_in_registry
 
     materialized = [dict(row) for row in rows]
     if reg_data is None:
@@ -183,39 +186,22 @@ def enrich_upgrade_rows(
 
         reg_data = get_registry_data()
 
-    results: list[dict[str, str]] = []
     for row in materialized:
         reported_version = row["Version"]
-        displayed_version = reported_version
         if reported_version.strip().lower() == "unknown":
             detected = find_version_in_registry(
                 row["Name"], row["Id"], reg_data, allow_fuzzy=False
             )
             if detected:
-                displayed_version = detected
                 row["Version"] = detected
 
-        uncertain = (
-            not reported_version
-            or reported_version.strip().lower() in {"unknown", "???"}
-            or any(token in reported_version for token in ("<", ">", "~"))
-        )
-        if (
-            not uncertain
-            and parse_version_tuple(displayed_version) is not None
-            and row.get("Available")
-            and not is_version_newer(row["Available"], displayed_version)
-        ):
-            continue
-        results.append(row)
-
-    results.sort(
+    materialized.sort(
         key=lambda item: (
             item["Version"].lower() != "unknown",
             item["Name"].lower(),
         )
     )
-    return results
+    return materialized
 
 
 def parse_winget_upgrade_strict(
