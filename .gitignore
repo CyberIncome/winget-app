@@ -1,8 +1,9 @@
-# Virtual environment
+# Virtual environments
+/.venv/
 /venv/
 
 # Python bytecode
-src/logic/__pycache__/
+__pycache__/
 *.py[cod]
 *.pyo
 *.pyc
@@ -12,9 +13,11 @@ src/logic/__pycache__/
 /dist/
 *.spec
 
-# Test / coverage caches
+# Test / coverage / lint caches
 .pytest_cache/
+.ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 
 # IDE files
@@ -33,3 +36,7 @@ conductor/setup_state.json
 
 # Local logs
 *.log
+
+# Local scratch / temp files
+*.tmp
+*.bak
