@@ -18,9 +18,11 @@ from src.logic.executor import (
         "Google.Chrome\x1b",
         "Google.Chrome\x7f",
         "Google.Chrome\nOther.App",
+        "--help",
+        "-Example.App",
     ],
 )
-def test_app_id_rejects_control_characters(value):
+def test_app_id_rejects_unsafe_values(value):
     assert is_valid_app_id(value) is False
     with pytest.raises(ValueError):
         validate_app_id(value)
