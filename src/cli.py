@@ -10,7 +10,11 @@ import time
 import click
 
 from src.logic.command_runner import CommandResult, run_command
-from src.logic.executor import WingetExecutor, validate_app_id
+from src.logic.executor import (
+    WingetExecutor,
+    validate_app_id,
+    validate_source_name,
+)
 from src.logic.upgrade_parser import WingetParseError, parse_winget_upgrade_strict
 
 
@@ -178,11 +182,22 @@ def inventory(ctx, app_type):
 @click.option(
     "--all", "update_all", is_flag=True, help="Update all available packages."
 )
+@click.option(
+    "--source",
+    help=(
+        "Winget source for one exact package update; useful when the same "
+        "package ID exists in multiple configured sources."
+    ),
+)
 @click.pass_context
-def update(ctx, app_id, update_all):
+def update(ctx, app_id, update_all, source):
     """Update a specific app or all apps."""
     executor = WingetExecutor()
     if update_all:
+        if source:
+            raise click.UsageError(
+                "--source applies only to a specific app update, not --all"
+            )
         _progress(ctx, "Updating all packages...", "green")
         _run_update_live(executor.get_update_all_cmd())
         return
@@ -193,9 +208,18 @@ def update(ctx, app_id, update_all):
         validate_app_id(app_id)
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="app_id") from exc
+    try:
+        source = validate_source_name(source)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--source") from exc
 
     _progress(ctx, f"Updating {app_id}...", "green")
-    _run_update_live(executor.get_update_cmd(app_id))
+    _run_update_live(
+        executor.get_update_cmd(
+            app_id,
+            source=source or None,
+        )
+    )
 
 
 def _run_update_live(command):
