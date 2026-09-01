@@ -98,6 +98,38 @@ class ProductionMainWindow(HardenedMainWindow):
             "Update every package proven upgradeable by the current Winget scan"
         )
 
+    # ── Foreground operation exclusion ──────────────
+
+    def _foreground_operation_blocked(self, requested):
+        """Return true when another foreground task owns the application."""
+        blockers = sorted(self._active_tasks)
+        if not blockers:
+            return False
+        self.logger.warning(
+            "Blocked %s while foreground task(s) active: %s",
+            requested,
+            ", ".join(blockers),
+        )
+        return True
+
+    def refresh_updates(self):
+        if self._foreground_operation_blocked("refresh updates"):
+            return
+        super().refresh_updates()
+
+    def refresh_inventory(self):
+        if self._foreground_operation_blocked("refresh inventory"):
+            return
+        super().refresh_inventory()
+
+    def batch_update(self, package_refs):
+        if self._foreground_operation_blocked("package update"):
+            self.append_log(
+                "\n[!] Another scan/update task is active; update request ignored."
+            )
+            return
+        super().batch_update(package_refs)
+
     # ── Managed job result safety ───────────────────
 
     def _start_job(
