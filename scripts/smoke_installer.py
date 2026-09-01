@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -84,6 +85,58 @@ def _run(
         )
 
 
+def _wait_for_uninstall_complete(
+    gui: Path,
+    cli: Path,
+    build_info: Path,
+    *,
+    timeout: float = 30.0,
+) -> None:
+    """Wait for Inno's detached cleanup process to finish removing app state."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining_files = [
+            path for path in (gui, cli, build_info) if path.exists()
+        ]
+        uninstall_entries = _find_existing_uninstall_entries()
+        if not remaining_files and not uninstall_entries:
+            return
+        if time.monotonic() >= deadline:
+            details = [str(path) for path in remaining_files]
+            details.extend(f"HKCU:{entry}" for entry in uninstall_entries)
+            raise RuntimeError(
+                "Silent uninstall did not finish cleanup within "
+                f"{timeout:.0f}s: " + ", ".join(details)
+            )
+        time.sleep(0.2)
+
+
+def _cleanup_temp_tree(root: Path, *, timeout: float = 30.0) -> None:
+    """Remove the smoke directory, retrying transient Windows sharing violations.
+
+    Inno Setup's uninstaller may return before its detached cleanup helper closes
+    the /LOG file. A normal TemporaryDirectory context removes the directory
+    immediately and can therefore fail with WinError 32 even though uninstall
+    itself succeeded. Retry boundedly instead of ignoring cleanup failures.
+    """
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while True:
+        try:
+            shutil.rmtree(root)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            last_error = exc
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for installer-smoke temporary files to be "
+                    f"released: {root}"
+                ) from last_error
+            time.sleep(0.25)
+
+
 def smoke_installer(installer: Path) -> None:
     if os.name != "nt":
         raise SystemExit("Installer smoke must run on Windows.")
@@ -92,8 +145,8 @@ def smoke_installer(installer: Path) -> None:
 
     _require_no_existing_install()
 
-    with tempfile.TemporaryDirectory(prefix="wud-installer-smoke-") as temp:
-        root = Path(temp)
+    root = Path(tempfile.mkdtemp(prefix="wud-installer-smoke-"))
+    try:
         install_dir = root / "app"
         setup_log = root / "setup.log"
         uninstall_log = root / "uninstall.log"
@@ -141,16 +194,9 @@ def smoke_installer(installer: Path) -> None:
             timeout=300,
         )
 
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and (
-            gui.exists() or cli.exists() or build_info.exists()
-        ):
-            time.sleep(0.2)
-        if gui.exists() or cli.exists() or build_info.exists():
-            raise RuntimeError("Silent uninstall left application files behind.")
-
-        if _find_existing_uninstall_entries():
-            raise RuntimeError("Silent uninstall left an HKCU uninstall entry behind.")
+        _wait_for_uninstall_complete(gui, cli, build_info)
+    finally:
+        _cleanup_temp_tree(root)
 
     print("Installer install / launch / uninstall smoke: PASS")
 
