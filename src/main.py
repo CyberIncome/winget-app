@@ -1,12 +1,14 @@
-import sys
-import os
-import logging
 import faulthandler
+import logging
+import os
+import sys
 import threading
 import time
 import uuid
 from multiprocessing import freeze_support
+
 from src.logic.config import CONFIG_DIR
+
 
 _BOOT_STARTED_AT = time.perf_counter()
 _FAULT_LOG_STREAM = None
@@ -163,13 +165,17 @@ def main():
     window = ProductionMainWindow()
     window.show()
 
-    if "pytest" not in sys.modules:
-        exit_code = app.exec()
-        logger.info(
-            "SESSION EVENT LOOP EXIT id=%s code=%s", _SESSION_ID, exit_code
-        )
-        return exit_code
-    return 0
+    if "pytest" in sys.modules:
+        # The pytest smoke test must not leave a top-level Qt window or its
+        # GUI logging handler alive for later tests in the same process.
+        window.close()
+        return 0
+
+    exit_code = app.exec()
+    logger.info(
+        "SESSION EVENT LOOP EXIT id=%s code=%s", _SESSION_ID, exit_code
+    )
+    return exit_code
 
 
 if __name__ == "__main__":
