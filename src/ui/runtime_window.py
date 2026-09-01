@@ -20,7 +20,7 @@ class RuntimeMainWindow(ProductionMainWindow):
         try:
             if timer.isActive():
                 timer.stop()
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.debug("Could not stop %s timer: %s", label, exc)
 
     def _stop_qprocess_safely(self) -> None:
@@ -32,7 +32,7 @@ class RuntimeMainWindow(ProductionMainWindow):
         state = None
         try:
             state = process.state()
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.warning("QProcess state unavailable during close: %s", exc)
 
         if state == QProcess.NotRunning:
@@ -40,13 +40,13 @@ class RuntimeMainWindow(ProductionMainWindow):
 
         try:
             process.terminate()
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.warning("QProcess terminate failed during close: %s", exc)
 
         finished = False
         try:
             finished = bool(process.waitForFinished(750))
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.warning("QProcess wait failed during close: %s", exc)
 
         if finished:
@@ -54,12 +54,12 @@ class RuntimeMainWindow(ProductionMainWindow):
 
         try:
             process.kill()
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.error("QProcess kill failed during close: %s", exc)
 
         try:
             process.waitForFinished(1000)
-        except (AttributeError, RuntimeError) as exc:
+        except Exception as exc:
             self.logger.warning("QProcess final wait failed during close: %s", exc)
 
     def _flush_pending_pat_safely(self) -> None:
@@ -68,7 +68,7 @@ class RuntimeMainWindow(ProductionMainWindow):
             return
         try:
             active = timer.isActive()
-        except RuntimeError:
+        except Exception:
             active = False
         if not active:
             return
@@ -83,10 +83,10 @@ class RuntimeMainWindow(ProductionMainWindow):
         if self._is_closing:
             try:
                 QMainWindow.closeEvent(self, event)
-            except RuntimeError:
+            except Exception:
                 try:
                     event.accept()
-                except (AttributeError, RuntimeError):
+                except Exception:
                     pass
             return
 
@@ -137,15 +137,15 @@ class RuntimeMainWindow(ProductionMainWindow):
 
         try:
             logging.getLogger().removeHandler(self._log_handler)
-        except (AttributeError, RuntimeError):
+        except Exception:
             pass
         self.logger.info("SESSION CLEAN EXIT id=%s", self._session_id)
 
         try:
             QMainWindow.closeEvent(self, event)
-        except RuntimeError as exc:
+        except Exception as exc:
             self.logger.warning("Qt base closeEvent failed: %s", exc)
             try:
                 event.accept()
-            except (AttributeError, RuntimeError):
+            except Exception:
                 pass
