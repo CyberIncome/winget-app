@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 _VALID_APP_ID_RE = re.compile(r"[A-Za-z0-9._\-]+")
 
 
-def _has_control_separator(value):
-    return any(char in value for char in ("\r", "\n", "\x00"))
+def _has_control_character(value):
+    """Return whether a process argument contains an ASCII control byte."""
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
 
 
 def _is_safe_app_id(value):
@@ -18,7 +19,7 @@ def _is_safe_app_id(value):
     return bool(
         value
         and not value.endswith(".")
-        and not _has_control_separator(value)
+        and not _has_control_character(value)
         and _VALID_APP_ID_RE.fullmatch(value)
     )
 
@@ -41,7 +42,7 @@ def is_valid_app_id(app_id):
 def validate_package_name(package_name):
     """Validate a package name passed as one process argument."""
     raw = "" if package_name is None else str(package_name)
-    if not raw or _has_control_separator(raw):
+    if not raw or _has_control_character(raw):
         raise ValueError(
             f"Invalid package name rejected: {package_name!r}"
         )
@@ -58,7 +59,7 @@ def validate_source_name(source_name):
     if source_name is None:
         return ""
     raw = str(source_name)
-    if _has_control_separator(raw):
+    if _has_control_character(raw):
         raise ValueError(f"Invalid source name rejected: {source_name!r}")
     value = raw.strip()
     if not value:
