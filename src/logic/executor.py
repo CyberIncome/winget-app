@@ -6,33 +6,41 @@ import re
 
 logger = logging.getLogger(__name__)
 
-_VALID_APP_ID_RE = re.compile(r"^[A-Za-z0-9._\-]+$")
-_VALID_PACKAGE_NAME_RE = re.compile(r"^[^\r\n\x00]+$")
-_VALID_SOURCE_NAME_RE = re.compile(r"^[^-\r\n\x00][^\r\n\x00]*$")
+_VALID_APP_ID_RE = re.compile(r"[A-Za-z0-9._\-]+")
+
+
+def _has_control_separator(value):
+    return any(char in value for char in ("\r", "\n", "\x00"))
 
 
 def validate_app_id(app_id):
     """Validate a Winget package ID before adding it as an argument."""
-    if not app_id or not _VALID_APP_ID_RE.match(str(app_id)):
+    raw = "" if app_id is None else str(app_id)
+    if not raw or _has_control_separator(raw) or not _VALID_APP_ID_RE.fullmatch(raw):
         raise ValueError(f"Invalid app ID rejected: {app_id!r}")
-    return str(app_id)
+    return raw
 
 
 def is_valid_app_id(app_id):
     """Return whether a string is a safe Winget package ID."""
-    return bool(app_id and _VALID_APP_ID_RE.match(str(app_id)))
+    if app_id is None:
+        return False
+    raw = str(app_id)
+    return bool(
+        raw
+        and not _has_control_separator(raw)
+        and _VALID_APP_ID_RE.fullmatch(raw)
+    )
 
 
 def validate_package_name(package_name):
     """Validate a package name passed as one process argument."""
-    if (
-        not package_name
-        or not _VALID_PACKAGE_NAME_RE.match(str(package_name))
-    ):
+    raw = "" if package_name is None else str(package_name)
+    if not raw or _has_control_separator(raw):
         raise ValueError(
             f"Invalid package name rejected: {package_name!r}"
         )
-    value = str(package_name).strip()
+    value = raw.strip()
     if not value or value.startswith("-"):
         raise ValueError(
             f"Invalid package name rejected: {package_name!r}"
@@ -42,10 +50,15 @@ def validate_package_name(package_name):
 
 def validate_source_name(source_name):
     """Validate an optional Winget source name used as one CLI argument."""
-    if source_name is None or str(source_name).strip() == "":
+    if source_name is None:
         return ""
-    value = str(source_name).strip()
-    if not _VALID_SOURCE_NAME_RE.match(value):
+    raw = str(source_name)
+    if _has_control_separator(raw):
+        raise ValueError(f"Invalid source name rejected: {source_name!r}")
+    value = raw.strip()
+    if not value:
+        return ""
+    if value.startswith("-"):
         raise ValueError(f"Invalid source name rejected: {source_name!r}")
     return value
 
