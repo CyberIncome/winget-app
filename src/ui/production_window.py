@@ -52,6 +52,10 @@ class ProductionUpdateModel(UpdateModel):
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
+        if not 0 <= index.row() < len(self._data):
+            return None
+        if not 0 <= index.column() < len(self.headers):
+            return None
         if (
             not self._is_inventory
             and role == Qt.CheckStateRole
@@ -93,7 +97,7 @@ class ProductionMainWindow(HardenedMainWindow):
         self._failed_start_pending = False
         self._terminal_line_limit = 16 * 1024
         self._process_stdout_bytes = bytearray()
-        self._process_stdout_overflow = False
+        self._process_stdout_invalid_reason = None
         super().__init__()
         self.console.setMaximumBlockCount(10_000)
         self.process.started.connect(self._handle_process_started)
@@ -119,7 +123,7 @@ class ProductionMainWindow(HardenedMainWindow):
         if self._foreground_operation_blocked("refresh updates"):
             return
         self._process_stdout_bytes.clear()
-        self._process_stdout_overflow = False
+        self._process_stdout_invalid_reason = None
         super().refresh_updates()
 
     def refresh_inventory(self):
@@ -206,20 +210,28 @@ class ProductionMainWindow(HardenedMainWindow):
 
     # ── Process output safety ───────────────────────
 
+    def _invalidate_refresh_stdout(self, reason):
+        if self.current_operation != "refresh":
+            return
+        if self._process_stdout_invalid_reason is None:
+            self._process_stdout_invalid_reason = str(reason)
+        self.logger.error(
+            "Winget refresh stdout invalidated: %s",
+            self._process_stdout_invalid_reason,
+        )
+
     def _capture_refresh_stdout(self, raw_bytes):
         """Retain a bounded authoritative byte stream for Winget parsing."""
         if self.current_operation != "refresh" or not raw_bytes:
             return
-        if self._process_stdout_overflow:
+        if self._process_stdout_invalid_reason is not None:
             return
         remaining = self._max_output_bytes - len(self._process_stdout_bytes)
         if len(raw_bytes) > remaining:
             if remaining > 0:
                 self._process_stdout_bytes.extend(raw_bytes[:remaining])
-            self._process_stdout_overflow = True
-            self.logger.error(
-                "Winget refresh stdout exceeded %d byte safety limit.",
-                self._max_output_bytes,
+            self._invalidate_refresh_stdout(
+                f"output exceeded {self._max_output_bytes} byte safety limit"
             )
             return
         self._process_stdout_bytes.extend(raw_bytes)
@@ -239,6 +251,9 @@ class ProductionMainWindow(HardenedMainWindow):
                     self.full_output = self.full_output[-self._max_output_bytes :]
             self._handle_process_output("stdout", decoded)
         except Exception as exc:
+            self._invalidate_refresh_stdout(
+                f"stdout handling failed ({type(exc).__name__}: {exc})"
+            )
             self.logger.exception("Error handling process stdout: %s", exc)
 
     def handle_stderr(self):
@@ -281,25 +296,24 @@ class ProductionMainWindow(HardenedMainWindow):
     # ── QProcess generation safety ──────────────────
 
     def handle_process_error(self, error):
-        failed_to_start = (
-            error == QProcess.FailedToStart
-            or str(error).endswith("FailedToStart")
-        )
-        if failed_to_start:
-            self._failed_start_pending = True
-            # A missing/broken Winget executable is process-global, not a
-            # package-specific failure. Abort the remaining batch instead of
-            # attempting the same impossible start for every queued package.
-            if self.current_operation == "update" and hasattr(
-                self, "process_queue"
-            ):
-                self.process_queue.clear()
-                self.activity_progress.setText("")
+        operation = self.current_operation
         try:
+            failed_to_start = (
+                error == QProcess.FailedToStart
+                or str(error).endswith("FailedToStart")
+            )
+            if failed_to_start:
+                self._failed_start_pending = True
+                # A missing/broken Winget executable is process-global, not a
+                # package-specific failure. Abort the remaining batch instead
+                # of attempting the same impossible start for every package.
+                if operation == "update" and hasattr(self, "process_queue"):
+                    self.process_queue.clear()
+                    self.activity_progress.setText("")
             super().handle_process_error(error)
         except Exception as exc:
             self._recover_process_callback_failure(
-                self.current_operation,
+                operation,
                 "errorOccurred",
                 exc,
             )
@@ -324,7 +338,13 @@ class ProductionMainWindow(HardenedMainWindow):
         if operation == "update" and hasattr(self, "process_queue"):
             self.process_queue.clear()
         self.current_operation = None
-        self.activity_progress.setText("")
+        try:
+            self.activity_progress.setText("")
+        except Exception as recovery_exc:
+            self.logger.debug(
+                "Could not clear activity progress during recovery: %s",
+                recovery_exc,
+            )
 
         if operation in {"refresh", "update"}:
             try:
@@ -364,11 +384,12 @@ class ProductionMainWindow(HardenedMainWindow):
             self.handle_stdout()
             self.handle_stderr()
             if operation == "refresh":
-                if self._process_stdout_overflow:
+                if self._process_stdout_invalid_reason is not None:
                     self.full_output = ""
                     self.append_log(
-                        "\n[!] Winget scan output exceeded the safety limit; "
-                        "the scan will be treated as invalid."
+                        "\n[!] Winget scan output is invalid: "
+                        f"{self._process_stdout_invalid_reason}. The scan will "
+                        "not be interpreted as a successful empty result."
                     )
                 else:
                     self.full_output = decode_process_bytes(
