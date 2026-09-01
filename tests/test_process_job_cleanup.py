@@ -67,7 +67,8 @@ def test_cleanup_contains_process_and_queue_state_errors(qtbot):
 
     assert job._process is None
     assert job._queue is None
-    assert process.terminate_calls >= 1
+    assert process.terminate_calls >= 2
+    assert process.kill_calls == 1
     assert process.close_calls == 1
     assert queue.close_calls == 1
     assert queue.cancel_calls == 1
