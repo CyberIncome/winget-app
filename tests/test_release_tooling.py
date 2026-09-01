@@ -51,6 +51,9 @@ def test_inno_script_is_x64compatible_per_user_and_stable_id():
     assert "PrivilegesRequired=lowest" in source
     assert "WingetUniversalDashboardCLI.exe" in source
     assert "OutputBaseFilename=WingetUniversalDashboard-Setup-x64" in source
+    assert "VersionInfoVersion={#AppVersionNumeric}" in source
+    assert "VersionInfoProductVersion={#AppVersionNumeric}" in source
+    assert "VersionInfoProductTextVersion={#AppVersion}" in source
 
 
 def test_release_builder_emits_checksums_and_installer():
