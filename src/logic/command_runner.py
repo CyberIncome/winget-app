@@ -7,6 +7,8 @@ import os
 import subprocess
 from typing import Mapping, Sequence
 
+from src.logic.output_decode import decode_process_bytes
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -42,8 +44,8 @@ class CommandResult:
 def _text(value) -> str:
     if value is None:
         return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return decode_process_bytes(value)
     return str(value)
 
 
@@ -52,9 +54,13 @@ def run_command(
     timeout: float = 300,
     environment: Mapping[str, str] | None = None,
 ) -> CommandResult:
-    """Run a command and return a lossless structured outcome.
+    """Run a command and return a structured, locale-aware outcome.
 
-    WinGet formats its tabular output using the console width.  Force a wide
+    Output is captured as raw bytes and decoded only after the child returns.
+    This avoids corrupting WinGet output that uses a Windows code page or
+    UTF-16 and also avoids arbitrary decoder boundaries in captured output.
+
+    WinGet formats its tabular output using the console width. Force a wide
     ``COLUMNS`` value unless the caller explicitly supplies another one so the
     CLI receives the same non-truncated protocol surface as the GUI.
     """
@@ -65,7 +71,7 @@ def run_command(
             {str(key): str(value) for key, value in environment.items()}
         )
     process_environment.setdefault("COLUMNS", "300")
-    # An inherited COLUMNS value can be narrow.  For this app's command runner
+    # An inherited COLUMNS value can be narrow. For this app's command runner
     # the stable table contract is more important than preserving terminal UI.
     if environment is None or "COLUMNS" not in environment:
         process_environment["COLUMNS"] = "300"
@@ -74,18 +80,15 @@ def run_command(
         completed = subprocess.run(
             normalized,
             capture_output=True,
-            text=True,
             timeout=timeout,
-            encoding="utf-8",
-            errors="replace",
             check=False,
             env=process_environment,
         )
         return CommandResult(
             command=normalized,
             returncode=completed.returncode,
-            stdout=completed.stdout or "",
-            stderr=completed.stderr or "",
+            stdout=_text(completed.stdout),
+            stderr=_text(completed.stderr),
         )
     except subprocess.TimeoutExpired as exc:
         return CommandResult(
