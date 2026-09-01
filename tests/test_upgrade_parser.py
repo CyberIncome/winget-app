@@ -1,6 +1,10 @@
 import pytest
 
-from src.logic.upgrade_parser import WingetParseError, parse_upgrade_table
+from src.logic.upgrade_parser import (
+    WingetParseError,
+    parse_upgrade_table,
+    parse_winget_upgrade_strict,
+)
 
 
 def test_parse_upgrade_table_standard():
@@ -42,8 +46,11 @@ def test_no_updates_is_empty():
     assert parse_upgrade_table("No applicable update found.") == []
 
 
-def test_empty_output_is_empty():
-    assert parse_upgrade_table("") == []
+def test_empty_output_is_explicit_failure():
+    with pytest.raises(WingetParseError, match="empty output"):
+        parse_upgrade_table("")
+    with pytest.raises(WingetParseError, match="empty output"):
+        parse_upgrade_table("  \r\n  ")
 
 
 def test_missing_required_column_is_explicit_failure():
@@ -84,3 +91,30 @@ def test_empty_table_without_no_update_marker_fails():
 """
     with pytest.raises(WingetParseError, match="no package rows"):
         parse_upgrade_table(output)
+
+
+def test_strict_parser_never_vetoes_winget_reported_upgrade():
+    output = """Name                    Id                    Version      Available       Source
+------------------------------------------------------------------------------------
+Vendor Channel App      Vendor.Channel.App    1.0-beta     1.0             winget
+"""
+
+    rows = parse_winget_upgrade_strict(output, reg_data=[])
+
+    assert len(rows) == 1
+    assert rows[0]["Id"] == "Vendor.Channel.App"
+    assert rows[0]["Version"] == "1.0-beta"
+    assert rows[0]["Available"] == "1.0"
+
+
+def test_known_versions_do_not_require_windows_registry_imports():
+    output = """Name                    Id                    Version      Available       Source
+------------------------------------------------------------------------------------
+Example App             Example.App           5.0          4.9             winget
+"""
+
+    rows = parse_winget_upgrade_strict(output)
+
+    assert len(rows) == 1
+    assert rows[0]["Version"] == "5.0"
+    assert rows[0]["Available"] == "4.9"
