@@ -4,11 +4,20 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QProcess, Qt
+from PySide6.QtCore import (
+    QModelIndex,
+    QProcess,
+    QProcessEnvironment,
+    QTimer,
+    Qt,
+)
 from PySide6.QtWidgets import QHeaderView, QTableView
 
 from src.logic.config import ConfigManager
-from src.logic.executor import is_valid_app_id
+from src.logic.executor import (
+    is_valid_app_id,
+    validate_source_name,
+)
 from src.ui.hardened_window import HardenedMainWindow
 from src.ui.main_window import UpdateModel
 
@@ -46,6 +55,9 @@ class ProductionMainWindow(HardenedMainWindow):
         self._failed_start_pending = False
         super().__init__()
         self.process.started.connect(self._handle_process_started)
+        self.update_all_btn.setToolTip(
+            "Update every package proven upgradeable by the current Winget scan"
+        )
 
     # ── QProcess generation safety ──────────────────
 
@@ -75,6 +87,7 @@ class ProductionMainWindow(HardenedMainWindow):
             self.logger.warning(
                 "Ignoring finished signal for a failed-to-start generation."
             )
+            self._failed_start_pending = False
             self._process_start_failed = False
             return
         super().process_finished(code, status)
@@ -122,21 +135,32 @@ class ProductionMainWindow(HardenedMainWindow):
             "Scanning for updates...", False, "refresh"
         )
 
+    def _ensure_production_update_model(self):
+        """Ensure detective-only results still use the production table contract."""
+        model = self.proxy_model.sourceModel()
+        if model is not None:
+            return model
+        model = ProductionUpdateModel([])
+        model.check_toggled.connect(
+            lambda row, checked: self.handle_native_checkbox(
+                self.table,
+                self.proxy_model,
+                row,
+                checked,
+            )
+        )
+        self.proxy_model.setSourceModel(model)
+        return model
+
     def _detective_job_succeeded(self, results):
         """Merge detective data without overriding authoritative Winget rows."""
-        model = self.proxy_model.sourceModel()
-        existing_objects = (
-            {id(item) for item in model._data} if model is not None else set()
-        )
-        official_available = (
-            {
-                id(item): item.get("Available", "")
-                for item in model._data
-                if self._is_winget_update_item(item)
-            }
-            if model is not None
-            else {}
-        )
+        model = self._ensure_production_update_model()
+        existing_objects = {id(item) for item in model._data}
+        official_available = {
+            id(item): item.get("Available", "")
+            for item in model._data
+            if self._is_winget_update_item(item)
+        }
 
         super()._detective_job_succeeded(results)
         model = self.proxy_model.sourceModel()
@@ -159,17 +183,34 @@ class ProductionMainWindow(HardenedMainWindow):
 
     @staticmethod
     def _package_ref_for_winget_item(item):
+        try:
+            source = validate_source_name(item.get("Source"))
+        except ValueError:
+            return None
+
         package_id = item.get("Id")
         if is_valid_app_id(package_id):
-            return {"value": package_id, "match_by": "id"}
-        name = str(item.get("Name") or "").strip()
-        if name:
-            return {"value": name, "match_by": "name"}
-        return None
+            ref = {"value": package_id, "match_by": "id"}
+        else:
+            name = str(item.get("Name") or "").strip()
+            if not name or name.startswith("-"):
+                return None
+            ref = {"value": name, "match_by": "name"}
+        if source:
+            ref["source"] = source
+        return ref
 
     @staticmethod
     def _is_winget_update_item(item):
-        return item.get("UpdateSource", "winget") == "winget"
+        return item.get("UpdateSource") == "winget"
+
+    @staticmethod
+    def _package_ref_key(ref):
+        return (
+            ref["match_by"],
+            ref["value"].lower(),
+            str(ref.get("source") or "").lower(),
+        )
 
     def _selected_source_items(self, table, proxy):
         model = proxy.sourceModel() if proxy else None
@@ -236,7 +277,7 @@ class ProductionMainWindow(HardenedMainWindow):
             ref = self._package_ref_for_winget_item(candidates[0])
             if ref is None:
                 continue
-            key = (ref["match_by"], ref["value"].lower())
+            key = self._package_ref_key(ref)
             if key not in seen:
                 refs.append(ref)
                 seen.add(key)
@@ -263,7 +304,7 @@ class ProductionMainWindow(HardenedMainWindow):
                 ref = self._package_ref_for_winget_item(item)
                 if ref is None:
                     continue
-                key = (ref["match_by"], ref["value"].lower())
+                key = self._package_ref_key(ref)
                 if key not in seen:
                     refs.append(ref)
                     seen.add(key)
@@ -298,7 +339,7 @@ class ProductionMainWindow(HardenedMainWindow):
             ref = self._package_ref_for_winget_item(item)
             if ref is None:
                 continue
-            key = (ref["match_by"], ref["value"].lower())
+            key = self._package_ref_key(ref)
             if key not in seen:
                 refs.append(ref)
                 seen.add(key)
@@ -308,6 +349,86 @@ class ProductionMainWindow(HardenedMainWindow):
                 len(refs),
             )
             self.batch_update(refs)
+
+    def run_next_update(self):
+        """Run the next queued exact package/source update."""
+        if self._is_closing:
+            return
+        if hasattr(self, "process_queue") and self.process_queue:
+            self.current_package_ref = self.process_queue.popleft()
+            ref_value = self.current_package_ref["value"]
+            match_by = self.current_package_ref["match_by"]
+            source = self.current_package_ref.get("source")
+            silent = self.current_package_ref.get("silent", True)
+            self.logger.info(
+                "Updating %s by %s source=%s (silent=%s)...",
+                ref_value,
+                match_by,
+                source or "default",
+                silent,
+            )
+            try:
+                command = self.executor.get_update_cmd(
+                    ref_value,
+                    match_by,
+                    silent=silent,
+                    source=source,
+                )
+                environment = QProcessEnvironment.systemEnvironment()
+                environment.insert("COLUMNS", "300")
+                self.process.setProcessEnvironment(environment)
+                self._set_progress_indeterminate(True)
+                self.process.start(command[0], command[1:])
+                self.start_process_watchdog(
+                    timeout=1800,
+                    idle_warning=300,
+                )
+                current = self._queue_total - len(self.process_queue)
+                self.activity_progress.setText(
+                    f"({current} / {self._queue_total})"
+                )
+            except Exception as exc:
+                self.logger.exception(
+                    "Failed to start update for %s", ref_value
+                )
+                self.append_log(
+                    f"\n[!] Failed to start {ref_value}: {exc}"
+                )
+                QTimer.singleShot(100, self.run_next_update)
+            return
+
+        self.current_operation = None
+        self.activity_progress.setText("")
+        self.set_ui_busy("Update complete.", False, "update")
+
+    def remove_package_from_model(self, package_ref):
+        """Remove only the package row matching reference and source."""
+        model = self.proxy_model.sourceModel()
+        if model is None:
+            return
+        target = str(package_ref["value"]).strip().lower()
+        match_by = package_ref["match_by"]
+        target_source = str(package_ref.get("source") or "").strip().lower()
+
+        for row_index, item in enumerate(model._data):
+            current = (
+                item.get("Id") if match_by == "id" else item.get("Name")
+            )
+            current = str(current or "").strip().lower()
+            item_source = str(item.get("Source") or "").strip().lower()
+            if current != target:
+                continue
+            if target_source and item_source != target_source:
+                continue
+
+            model.beginRemoveRows(QModelIndex(), row_index, row_index)
+            removed = model._data.pop(row_index)
+            selection_key = removed.get("Id") or removed.get("Name")
+            model._selected.pop(selection_key, None)
+            model.endRemoveRows()
+            self._stat_updates = len(model._data)
+            self.update_stats()
+            return
 
     # ── Shutdown persistence ─────────────────────────
 
