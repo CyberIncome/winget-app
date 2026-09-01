@@ -24,8 +24,15 @@ def setup_logging(verbose):
 
 
 def run_winget(args, timeout=300) -> CommandResult:
-    """Run a non-interactive Winget command with structured failure state."""
+    """Run a Winget argument list with structured failure state."""
     command = ["winget", *args]
+    logging.debug("Running: %s", " ".join(command))
+    return run_command(command, timeout=timeout)
+
+
+def run_upgrade_scan(timeout=300) -> CommandResult:
+    """Run the same non-interactive update scan used by the GUI."""
+    command = WingetExecutor().get_check_updates_cmd()
     logging.debug("Running: %s", " ".join(command))
     return run_command(command, timeout=timeout)
 
@@ -51,7 +58,7 @@ def print_table(rows, columns, widths=None):
             )
             widths[column] = min(max_width + 2, 50)
 
-    header = "".join(str(c).ljust(widths[c]) for c in columns)
+    header = "".join(str(column).ljust(widths[column]) for column in columns)
     click.secho(header, fg="cyan", bold=True)
     click.echo("─" * sum(widths.values()))
 
@@ -73,6 +80,7 @@ def print_table(rows, columns, widths=None):
 
 
 def output_json(data):
+    """Emit machine-readable JSON to stdout."""
     click.echo(json.dumps(data, indent=2, default=str))
 
 
@@ -105,12 +113,11 @@ def check(ctx):
     _progress(ctx, "Checking for updates...")
     from src.logic.parser import get_registry_data
 
-    output = _require_success(
-        run_winget(["upgrade", "--include-unknown"])
-    )
+    reg_data = get_registry_data()
+    output = _require_success(run_upgrade_scan())
     try:
         results = parse_winget_upgrade_strict(
-            output, reg_data=get_registry_data()
+            output, reg_data=reg_data
         )
     except WingetParseError as exc:
         raise click.ClickException(
@@ -126,7 +133,10 @@ def check(ctx):
         fg="green",
         bold=True,
     )
-    print_table(results, ["Name", "Id", "Version", "Available"])
+    print_table(
+        results,
+        ["Name", "Id", "Version", "Available", "Source"],
+    )
 
 
 @cli.command()
@@ -189,7 +199,8 @@ def update(ctx, app_id, update_all):
 
 
 def _run_update_live(command):
-    """Run an update with live merged stdout/stderr."""
+    """Run an update with live merged stdout/stderr and bounded cancellation."""
+    process = None
     try:
         process = subprocess.Popen(
             command,
@@ -203,6 +214,15 @@ def _run_update_live(command):
             for line in process.stdout:
                 click.echo(f"  {line}", nl=False)
         return_code = process.wait()
+    except KeyboardInterrupt as exc:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        raise click.Abort() from exc
     except OSError as exc:
         raise click.ClickException(
             f"winget failed to start: {exc}"
@@ -258,6 +278,7 @@ def detective(ctx, limit):
     config = ConfigManager()
     results = []
     checked = 0
+    fallback_values = set(config.url_fallbacks.values())
     for item in data:
         url = item.get("URL")
         if not url:
@@ -270,7 +291,7 @@ def detective(ctx, limit):
         if not (
             "github.com" in url
             or "release" in url.lower()
-            or url in config.url_fallbacks.values()
+            or url in fallback_values
         ):
             continue
 
@@ -318,14 +339,15 @@ def detective(ctx, limit):
 def status(ctx):
     """Show system summary: counts, versions, health."""
     _progress(ctx, "Gathering system status...")
-    from src.logic.parser import get_total_inventory
+    from src.logic.parser import get_registry_data, get_total_inventory
 
-    data = get_total_inventory()
-    output = _require_success(
-        run_winget(["upgrade", "--include-unknown"])
-    )
+    reg_data = get_registry_data()
+    data = get_total_inventory(reg_data=reg_data)
+    output = _require_success(run_upgrade_scan())
     try:
-        updates = parse_winget_upgrade_strict(output)
+        updates = parse_winget_upgrade_strict(
+            output, reg_data=reg_data
+        )
     except WingetParseError as exc:
         raise click.ClickException(
             f"could not parse winget upgrade output safely: {exc}"
@@ -363,6 +385,7 @@ def status(ctx):
 
 
 def main():
+    """Run the Click command group."""
     cli(obj={})
 
 
