@@ -1,9 +1,9 @@
 """Strict parsing helpers for ``winget upgrade`` table output.
 
-WinGet does not currently expose structured JSON output for ``upgrade``. This
-module therefore treats the human-readable table as an external protocol: the
-header and required column boundaries must be validated before any row is
-accepted. Malformed output raises ``WingetParseError`` instead of being
+WinGet does not currently expose structured JSON output for ``upgrade`` and
+its human-readable labels are localized. This module therefore treats the
+rendered table layout as an external protocol rather than requiring English
+column names. Malformed output raises ``WingetParseError`` instead of being
 silently reported as zero available updates.
 """
 
@@ -18,13 +18,15 @@ class WingetParseError(ValueError):
 
 
 _REQUIRED_COLUMNS = ("Name", "Id", "Version", "Available")
-_OPTIONAL_COLUMNS = ("Source",)
 _NO_UPDATE_MARKERS = (
     "no applicable update found",
     "no installed package found matching input criteria",
 )
-_TRAILER_RE = re.compile(r"^\d+\s+(?:upgrades?|packages?)\s+", re.IGNORECASE)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_VERSIONISH_RE = re.compile(
+    r"^(?:[<>~=]{1,2}\s*)?(?:v?\d+(?:\.\d+)*|unknown|\?\?\?)$",
+    re.IGNORECASE,
+)
 
 
 def _clean_lines(output: str) -> list[str]:
@@ -36,54 +38,110 @@ def _clean_lines(output: str) -> list[str]:
     return lines
 
 
-def _column_starts(header: str) -> dict[str, int]:
-    starts: dict[str, int] = {}
-    for name in (*_REQUIRED_COLUMNS, *_OPTIONAL_COLUMNS):
-        match = re.search(rf"(?<!\S){re.escape(name)}(?!\S)", header)
-        if match:
-            starts[name] = match.start()
-
-    missing = [name for name in _REQUIRED_COLUMNS if name not in starts]
-    if missing:
-        raise WingetParseError(
-            "Winget upgrade table is missing required column(s): "
-            + ", ".join(missing)
-        )
-
-    required_positions = [starts[name] for name in _REQUIRED_COLUMNS]
-    if required_positions != sorted(required_positions) or len(
-        set(required_positions)
-    ) != len(required_positions):
-        raise WingetParseError("Winget upgrade table columns are out of order")
-
-    if "Source" in starts and starts["Source"] <= starts["Available"]:
-        raise WingetParseError("Winget upgrade table Source column is out of order")
-    return starts
+def _is_separator(line: str) -> bool:
+    compact = line.replace(" ", "")
+    return len(compact) >= 10 and bool(re.fullmatch(r"-+", compact))
 
 
-def _slice_row(line: str, starts: dict[str, int]) -> dict[str, str]:
-    order = [
-        name
-        for name in (*_REQUIRED_COLUMNS, *_OPTIONAL_COLUMNS)
-        if name in starts
+def _header_has_source(header: str) -> bool:
+    """Infer the stable 4/5-column table shape without reading localized labels."""
+    fields = [
+        field.strip()
+        for field in re.split(r"\s{2,}", header.strip())
+        if field.strip()
     ]
-    row: dict[str, str] = {}
-    for index, name in enumerate(order):
-        start = starts[name]
-        end = starts[order[index + 1]] if index + 1 < len(order) else len(line)
-        row[name] = line[start:end].strip() if start < len(line) else ""
-    return row
+    if len(fields) == 4:
+        return False
+    if len(fields) == 5:
+        return True
+    raise WingetParseError(
+        "Winget upgrade table header did not expose a safe 4/5-column layout"
+    )
+
+
+def _plausible_package_id(value: str) -> bool:
+    """Reject obvious version fields from being mistaken for the package ID."""
+    value = value.strip()
+    if not value or any(char.isspace() for char in value):
+        return False
+    if _VERSIONISH_RE.fullmatch(value):
+        return False
+    return any(char.isalnum() for char in value)
+
+
+def _parse_layout_row(line: str, has_source: bool) -> dict[str, str] | None:
+    """Parse one row from the right, avoiding Unicode display-width offsets.
+
+    WinGet aligns columns by terminal display width, which does not equal
+    Python string length for CJK/full-width names. We therefore split on the
+    table's padding runs from the right. The final prefix contains ``Name`` and
+    ``Id``; the ID is the last whitespace-delimited token in that prefix.
+    """
+    parts = [part.strip() for part in re.split(r"\s{2,}", line.strip())]
+    minimum_parts = 4 if has_source else 3
+    if len(parts) < minimum_parts:
+        return None
+
+    if has_source:
+        source = parts[-1]
+        available = parts[-2]
+        version = parts[-3]
+        prefix_parts = parts[:-3]
+    else:
+        source = ""
+        available = parts[-1]
+        version = parts[-2]
+        prefix_parts = parts[:-2]
+
+    prefix = "  ".join(prefix_parts).strip()
+    try:
+        name, package_id = prefix.rsplit(None, 1)
+    except ValueError:
+        return None
+
+    name = name.strip()
+    package_id = package_id.strip()
+    version = version.strip()
+    available = available.strip()
+    source = source.strip()
+
+    if not name or not _plausible_package_id(package_id):
+        return None
+    if not version or not available:
+        return None
+    if has_source and not source:
+        return None
+
+    return {
+        "Name": name,
+        "Id": package_id,
+        "Version": version,
+        "Available": available,
+        "Source": source,
+    }
+
+
+def _looks_like_localized_summary(line: str) -> bool:
+    """Recognize a compact count-summary after at least one parsed row."""
+    stripped = line.strip()
+    return bool(
+        re.match(r"^\d+\s+", stripped)
+        and not re.search(r"\s{2,}", stripped)
+    )
 
 
 def parse_upgrade_table(output: str) -> list[dict[str, str]]:
-    """Parse validated rows from ``winget upgrade`` output.
+    """Parse validated rows from localized ``winget upgrade`` output.
 
-    ``Source`` is optional because WinGet output can omit it depending on source
-    configuration/version. The returned row always contains a ``Source`` key;
-    it is an empty string when the column is absent. Any malformed package row
-    fails the whole parse so a partial/truncated table cannot silently hide
-    updates. An empty/whitespace-only response is also an error: only an
-    explicit WinGet no-update marker may authoritatively mean zero updates.
+    WinGet's column labels are localized, but the table remains an ordered
+    four-column layout (Name, Id, Version, Available) with an optional fifth
+    Source column. Parsing is structural and right-anchored so full-width
+    characters in application names cannot shift Python slicing offsets.
+
+    Any malformed package row fails the whole parse so partial/truncated output
+    cannot silently hide updates. Empty/whitespace-only output is also an error:
+    only an explicit recognized no-update marker may authoritatively mean zero
+    updates.
     """
     if not output or not output.strip():
         raise WingetParseError(
@@ -95,28 +153,17 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
         return []
 
     lines = _clean_lines(output)
-    header_index = None
     separator_index = None
-    starts: dict[str, int] | None = None
+    has_source = None
 
-    for index, line in enumerate(lines):
-        if all(
-            re.search(rf"\b{re.escape(col)}\b", line)
-            for col in _REQUIRED_COLUMNS
-        ):
-            candidate_starts = _column_starts(line)
-            if index + 1 >= len(lines) or not re.fullmatch(
-                r"[-\s]+", lines[index + 1]
-            ):
-                raise WingetParseError(
-                    "Winget upgrade table header has no separator row"
-                )
-            header_index = index
-            separator_index = index + 1
-            starts = candidate_starts
-            break
+    for index in range(1, len(lines)):
+        if not _is_separator(lines[index]):
+            continue
+        separator_index = index
+        has_source = _header_has_source(lines[index - 1])
+        break
 
-    if header_index is None or separator_index is None or starts is None:
+    if separator_index is None or has_source is None:
         raise WingetParseError(
             "Winget output did not contain a recognizable upgrade table "
             "or no-update marker"
@@ -124,38 +171,22 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
 
     rows: list[dict[str, str]] = []
     malformed_data_lines = 0
-    min_data_width = starts["Available"] + 1
 
     for line in lines[separator_index + 1 :]:
+        row = _parse_layout_row(line, has_source)
+        if row is not None:
+            rows.append(row)
+            continue
+
         stripped = line.strip()
-        if _TRAILER_RE.match(stripped):
+        if rows and _looks_like_localized_summary(stripped):
             break
         if stripped.startswith(
             ("-", "The following", "Some packages", "Pinning")
         ):
             continue
-
-        if len(line) < min_data_width:
-            if any(char.isalnum() for char in line):
-                malformed_data_lines += 1
-            continue
-
-        row = _slice_row(line, starts)
-        if not row.get("Name") and not row.get("Id"):
-            continue
-        if not row.get("Name") or not row.get("Id"):
+        if any(char.isalnum() for char in stripped):
             malformed_data_lines += 1
-            continue
-        if not row.get("Version") or not row.get("Available"):
-            malformed_data_lines += 1
-            continue
-
-        rows.append(
-            {
-                **{name: row.get(name, "") for name in _REQUIRED_COLUMNS},
-                "Source": row.get("Source", ""),
-            }
-        )
 
     if malformed_data_lines:
         raise WingetParseError(
