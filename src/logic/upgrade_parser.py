@@ -80,9 +80,9 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
 
     ``Source`` is optional because WinGet output can omit it depending on source
     configuration/version. The returned row always contains a ``Source`` key;
-    it is an empty string when the column is absent. If output looks like an
-    upgrade table but its contract cannot be validated, ``WingetParseError`` is
-    raised.
+    it is an empty string when the column is absent. Any malformed package row
+    fails the whole parse so a partial/truncated table cannot silently hide
+    updates.
     """
     if not output or not output.strip():
         return []
@@ -154,10 +154,15 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
             }
         )
 
-    if malformed_data_lines and not rows:
+    if malformed_data_lines:
         raise WingetParseError(
-            "Winget upgrade table contained data rows that did not match "
-            "validated columns"
+            "Winget upgrade table contained "
+            f"{malformed_data_lines} malformed data row(s)"
+        )
+    if not rows:
+        raise WingetParseError(
+            "Winget upgrade table contained no package rows and no "
+            "recognized no-update marker"
         )
     return rows
 
