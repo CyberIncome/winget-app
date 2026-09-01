@@ -3,7 +3,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import sys
+
+
+# Executing ``python scripts/smoke_gui.py`` makes ``scripts`` sys.path[0].
+# Add the repository root explicitly before importing the application package so
+# the smoke gate behaves the same whether it is launched from the repo root or
+# by an absolute script path.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
