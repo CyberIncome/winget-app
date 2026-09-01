@@ -110,13 +110,15 @@ def _plausible_package_id(value: str) -> bool:
 
 
 def _boundaries_are_aligned(line: str, indexes: list[int]) -> bool:
-    """Ensure every calculated field start lands on an actual table boundary."""
+    """Reject calculated column starts that land inside a rendered field."""
     for index in indexes[1:]:
         if index <= 0 or index >= len(line):
             return False
-        if not line[index - 1].isspace():
-            return False
-        if line[index].isspace():
+        # Fixed-width Winget columns may contain padding at the nominal start,
+        # or the value may begin exactly there. What must never happen is for a
+        # calculated boundary to split two adjacent non-space characters: that
+        # indicates our display-width assumptions disagree with the renderer.
+        if not line[index - 1].isspace() and not line[index].isspace():
             return False
     return True
 
