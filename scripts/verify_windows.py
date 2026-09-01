@@ -121,6 +121,18 @@ def main() -> int:
             120,
         ),
         (
+            "native Windows lifecycle integration",
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "tests/test_windows_lifecycle.py",
+                "tests/test_remote_versions.py",
+            ],
+            180,
+        ),
+        (
             "full pytest suite",
             [sys.executable, "-m", "pytest", "-q"],
             600,
