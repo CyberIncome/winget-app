@@ -49,7 +49,7 @@ class ManagedProcessJob(QObject):
         return bool(
             not self._done
             and self._process is not None
-            and self._is_alive(self._process)
+            and self._is_alive(self._process) is True
         )
 
     @property
@@ -108,7 +108,16 @@ class ManagedProcessJob(QObject):
             return
 
         process = self._process
-        if process is None or self._is_alive(process):
+        if process is None:
+            return
+        alive = self._is_alive(process)
+        if alive is True:
+            return
+        if alive is None:
+            self._finish_failure(
+                f"{self.name} process state could not be determined",
+                terminate=True,
+            )
             return
 
         exit_code = self._exit_code(process)
@@ -195,14 +204,14 @@ class ManagedProcessJob(QObject):
         self.failed.emit(self.name, message)
         self.finished.emit(self.name)
 
-    def _is_alive(self, process) -> bool:
+    def _is_alive(self, process) -> bool | None:
         try:
             return bool(process.is_alive())
         except _PROCESS_STATE_ERRORS as exc:
             self._logger.warning(
                 "JOB STATE CHECK FAILED name=%s detail=%s", self.name, exc
             )
-            return False
+            return None
 
     def _exit_code(self, process):
         try:
@@ -252,28 +261,37 @@ class ManagedProcessJob(QObject):
         Cleanup is intentionally exception-contained. A Windows process handle
         can change state while the GUI is closing; cleanup failures are logged
         and escalation continues rather than escaping into ``closeEvent``.
+        An unknown liveness state is treated as possibly alive so cleanup still
+        escalates instead of leaving a child behind.
         """
         self._timer.stop()
         process = self._process
         if process is not None:
             pid = self.pid
             if pid is not None:
-                if terminate and self._is_alive(process):
+                alive = self._is_alive(process)
+                if terminate and alive is not False:
                     self._terminate(process)
                 self._join(process, grace_seconds)
-                if self._is_alive(process):
+
+                alive = self._is_alive(process)
+                if alive is not False:
                     self._logger.warning(
-                        "JOB LINGER TERMINATE name=%s pid=%s",
+                        "JOB LINGER TERMINATE name=%s pid=%s state=%s",
                         self.name,
                         pid,
+                        alive,
                     )
                     self._terminate(process)
                     self._join(process, 0.5)
-                if self._is_alive(process):
+
+                alive = self._is_alive(process)
+                if alive is not False:
                     self._logger.error(
-                        "JOB FORCE KILL name=%s pid=%s",
+                        "JOB FORCE KILL name=%s pid=%s state=%s",
                         self.name,
                         pid,
+                        alive,
                     )
                     self._kill(process)
                     self._join(process, 1.0)
