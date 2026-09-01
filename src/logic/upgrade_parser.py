@@ -109,6 +109,18 @@ def _plausible_package_id(value: str) -> bool:
     return any(char.isalnum() for char in value)
 
 
+def _boundaries_are_aligned(line: str, indexes: list[int]) -> bool:
+    """Ensure every calculated field start lands on an actual table boundary."""
+    for index in indexes[1:]:
+        if index <= 0 or index >= len(line):
+            return False
+        if not line[index - 1].isspace():
+            return False
+        if line[index].isspace():
+            return False
+    return True
+
+
 def _slice_display_row(
     line: str,
     starts: list[int],
@@ -117,6 +129,8 @@ def _slice_display_row(
     """Slice a row by terminal display columns, not Python codepoint offsets."""
     indexes = [_index_at_display_column(line, start) for start in starts]
     if any(index < 0 for index in indexes):
+        return None
+    if not _boundaries_are_aligned(line, indexes):
         return None
 
     # A row must actually reach the Available column. Source, when present in
