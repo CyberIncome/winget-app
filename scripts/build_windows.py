@@ -15,6 +15,12 @@ BUILD_DIR = ROOT / "build"
 SPEC_DIR = BUILD_DIR / "spec"
 
 
+def _read_version() -> tuple[str, tuple[int, int, int, int]]:
+    from release_common import read_version
+
+    return read_version()
+
+
 def _require_windows() -> None:
     if os.name != "nt":
         raise SystemExit("This build script must run on Windows.")
@@ -31,7 +37,46 @@ def _pyinstaller_run(arguments: list[str]) -> None:
     PyInstaller.__main__.run(arguments)
 
 
-def _common_args(name: str) -> list[str]:
+def _version_file(name: str, description: str) -> Path:
+    version, numeric = _read_version()
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    destination = BUILD_DIR / f"pyinstaller-version-{name}.txt"
+    numeric_tuple = repr(numeric)
+    content = f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={numeric_tuple},
+    prodvers={numeric_tuple},
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [
+          StringStruct('CompanyName', 'CyberIncome'),
+          StringStruct('FileDescription', '{description}'),
+          StringStruct('FileVersion', '{version}'),
+          StringStruct('InternalName', '{name}'),
+          StringStruct('OriginalFilename', '{name}.exe'),
+          StringStruct('ProductName', 'Winget Universal Dashboard'),
+          StringStruct('ProductVersion', '{version}')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
+    destination.write_text(content, encoding="utf-8")
+    return destination
+
+
+def _common_args(name: str, version_file: Path) -> list[str]:
     qss = ROOT / "src" / "ui" / "styles.qss"
     if not qss.is_file():
         raise SystemExit(f"Required stylesheet is missing: {qss}")
@@ -49,6 +94,8 @@ def _common_args(name: str) -> list[str]:
         str(BUILD_DIR / name),
         "--specpath",
         str(SPEC_DIR),
+        "--version-file",
+        str(version_file),
         "--add-data",
         f"{qss}:src/ui",
         "--collect-submodules",
@@ -61,9 +108,10 @@ def _common_args(name: str) -> list[str]:
 def build_gui() -> Path:
     """Build the canonical RuntimeMainWindow GUI executable."""
     name = "WingetUniversalDashboard"
+    version_file = _version_file(name, "Winget Universal Dashboard")
     _pyinstaller_run(
         [
-            *_common_args(name),
+            *_common_args(name, version_file),
             "--windowed",
             str(ROOT / "launcher.py"),
         ]
@@ -74,9 +122,10 @@ def build_gui() -> Path:
 def build_cli() -> Path:
     """Build the console CLI executable."""
     name = "WingetUniversalDashboardCLI"
+    version_file = _version_file(name, "Winget Universal Dashboard CLI")
     _pyinstaller_run(
         [
-            *_common_args(name),
+            *_common_args(name, version_file),
             str(ROOT / "cli_launcher.py"),
         ]
     )

@@ -4,7 +4,8 @@
 This is intentionally local/offline-first. It does not require GitHub Actions
 and does not modify installed packages. Pass ``--live-winget`` to add a
 read-only Winget update scan. Pass ``--build`` to package and launch both local
-release artifacts after deterministic checks pass.
+portable release artifacts. Pass ``--installer`` to build the complete release
+bundle and exercise a temporary silent installer install/launch/uninstall.
 """
 
 from __future__ import annotations
@@ -55,10 +56,7 @@ def _run(
         return False
 
     if completed.returncode != 0:
-        print(
-            f"FAIL: exit code {completed.returncode}",
-            file=sys.stderr,
-        )
+        print(f"FAIL: exit code {completed.returncode}", file=sys.stderr)
         return False
     print("PASS")
     return True
@@ -87,23 +85,25 @@ def main() -> int:
     parser.add_argument(
         "--live-winget",
         action="store_true",
-        help=(
-            "also run read-only winget --version and CLI update-scan "
-            "checks"
-        ),
+        help="also run read-only winget --version and CLI update-scan checks",
     )
     parser.add_argument(
         "--build",
         action="store_true",
         help="also build and launch-smoke both PyInstaller release artifacts",
     )
+    parser.add_argument(
+        "--installer",
+        action="store_true",
+        help=(
+            "build the complete Inno Setup release bundle, smoke portable "
+            "artifacts, then temporarily install/launch/uninstall the installer"
+        ),
+    )
     args = parser.parse_args()
 
     if os.name != "nt":
-        print(
-            "REFUSED: this acceptance gate must run on Windows.",
-            file=sys.stderr,
-        )
+        print("REFUSED: this acceptance gate must run on Windows.", file=sys.stderr)
         return 2
 
     _print_environment()
@@ -111,15 +111,7 @@ def main() -> int:
     checks: list[tuple[str, list[str], int, dict[str, str] | None]] = [
         (
             "compile all Python sources",
-            [
-                sys.executable,
-                "-m",
-                "compileall",
-                "-q",
-                "src",
-                "tests",
-                "scripts",
-            ],
+            [sys.executable, "-m", "compileall", "-q", "src", "tests", "scripts"],
             120,
             None,
         ),
@@ -179,22 +171,41 @@ def main() -> int:
                 ("Winget executable", ["winget", "--version"], 60, None),
                 (
                     "read-only Winget update scan",
-                    [
-                        sys.executable,
-                        "-m",
-                        "src.cli",
-                        "--json-output",
-                        "check",
-                    ],
+                    [sys.executable, "-m", "src.cli", "--json-output", "check"],
                     600,
                     None,
                 ),
             ]
         )
 
-    if args.build:
-        gui_artifact = ROOT / "dist" / "WingetUniversalDashboard.exe"
-        cli_artifact = ROOT / "dist" / "WingetUniversalDashboardCLI.exe"
+    gui_artifact = ROOT / "dist" / "WingetUniversalDashboard.exe"
+    cli_artifact = ROOT / "dist" / "WingetUniversalDashboardCLI.exe"
+
+    if args.installer:
+        checks.extend(
+            [
+                (
+                    "build complete release bundle",
+                    [sys.executable, "scripts/build_release.py"],
+                    1500,
+                    None,
+                ),
+                ("packaged CLI smoke", [str(cli_artifact), "--help"], 60, None),
+                (
+                    "packaged GUI create/close smoke",
+                    [str(gui_artifact)],
+                    90,
+                    {"WUD_PACKAGED_SMOKE": "1"},
+                ),
+                (
+                    "installer install/launch/uninstall smoke",
+                    [sys.executable, "scripts/smoke_installer.py"],
+                    600,
+                    None,
+                ),
+            ]
+        )
+    elif args.build:
         checks.extend(
             [
                 (
@@ -203,12 +214,7 @@ def main() -> int:
                     1200,
                     None,
                 ),
-                (
-                    "packaged CLI smoke",
-                    [str(cli_artifact), "--help"],
-                    60,
-                    None,
-                ),
+                ("packaged CLI smoke", [str(cli_artifact), "--help"], 60, None),
                 (
                     "packaged GUI create/close smoke",
                     [str(gui_artifact)],
