@@ -14,11 +14,11 @@ class HostileQProcess:
 
     def state(self):
         self.state_calls += 1
-        raise RuntimeError("state wrapper invalid")
+        raise OSError("state wrapper invalid")
 
     def terminate(self):
         self.terminate_calls += 1
-        raise RuntimeError("terminate handle raced")
+        raise ValueError("terminate handle raced")
 
     def waitForFinished(self, _timeout):
         self.wait_calls += 1
@@ -26,7 +26,7 @@ class HostileQProcess:
 
     def kill(self):
         self.kill_calls += 1
-        raise RuntimeError("kill handle raced")
+        raise LookupError("kill wrapper invalid")
 
 
 def test_runtime_close_contains_all_qprocess_teardown_errors(qtbot, monkeypatch):
