@@ -65,6 +65,22 @@ Example App             Example.App           1.0.0        1.1.0
 
 def test_unrecognized_error_output_does_not_become_zero_updates():
     with pytest.raises(WingetParseError):
-        parse_upgrade_table(
-            "Failed when opening source(s); unexpected error"
-        )
+        parse_upgrade_table("Failed when opening source(s); unexpected error")
+
+
+def test_partial_malformed_table_fails_instead_of_returning_subset():
+    output = """Name                    Id                    Version      Available       Source
+------------------------------------------------------------------------------------
+Good App                Good.App              1.0.0        1.1.0           winget
+broken
+"""
+    with pytest.raises(WingetParseError, match="malformed data row"):
+        parse_upgrade_table(output)
+
+
+def test_empty_table_without_no_update_marker_fails():
+    output = """Name                    Id                    Version      Available       Source
+------------------------------------------------------------------------------------
+"""
+    with pytest.raises(WingetParseError, match="no package rows"):
+        parse_upgrade_table(output)
