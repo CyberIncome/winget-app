@@ -7,12 +7,12 @@ import argparse
 import os
 from pathlib import Path
 import shutil
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
+SPEC_DIR = BUILD_DIR / "spec"
 
 
 def _require_windows() -> None:
@@ -33,6 +33,10 @@ def _pyinstaller_run(arguments: list[str]) -> None:
 
 def _common_args(name: str) -> list[str]:
     qss = ROOT / "src" / "ui" / "styles.qss"
+    if not qss.is_file():
+        raise SystemExit(f"Required stylesheet is missing: {qss}")
+    SPEC_DIR.mkdir(parents=True, exist_ok=True)
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
     return [
         "--noconfirm",
         "--clean",
@@ -44,11 +48,13 @@ def _common_args(name: str) -> list[str]:
         "--workpath",
         str(BUILD_DIR / name),
         "--specpath",
-        str(BUILD_DIR / "spec"),
+        str(SPEC_DIR),
         "--add-data",
         f"{qss}:src/ui",
         "--collect-submodules",
         "keyring.backends",
+        "--copy-metadata",
+        "keyring",
     ]
 
 
@@ -94,7 +100,9 @@ def main() -> int:
     artifacts = [build_gui(), build_cli()]
     missing = [str(path) for path in artifacts if not path.is_file()]
     if missing:
-        raise SystemExit("Build completed without expected artifact(s): " + ", ".join(missing))
+        raise SystemExit(
+            "Build completed without expected artifact(s): " + ", ".join(missing)
+        )
 
     print("Built artifacts:")
     for artifact in artifacts:
