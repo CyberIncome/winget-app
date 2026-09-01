@@ -7,6 +7,7 @@ import time
 from PySide6.QtCore import QProcess, Qt
 from PySide6.QtWidgets import QHeaderView, QTableView
 
+from src.logic.config import ConfigManager
 from src.logic.executor import is_valid_app_id
 from src.ui.hardened_window import HardenedMainWindow
 from src.ui.main_window import UpdateModel
@@ -55,6 +56,14 @@ class ProductionMainWindow(HardenedMainWindow):
         )
         if failed_to_start:
             self._failed_start_pending = True
+            # A missing/broken Winget executable is process-global, not a
+            # package-specific failure. Abort the remaining batch instead of
+            # attempting the same impossible start for every queued package.
+            if self.current_operation == "update" and hasattr(
+                self, "process_queue"
+            ):
+                self.process_queue.clear()
+                self.activity_progress.setText("")
         super().handle_process_error(error)
 
     def _handle_process_started(self):
@@ -114,18 +123,39 @@ class ProductionMainWindow(HardenedMainWindow):
         )
 
     def _detective_job_succeeded(self, results):
-        """Keep detective-only update hits informational, not executable."""
+        """Merge detective data without overriding authoritative Winget rows."""
         model = self.proxy_model.sourceModel()
         existing_objects = (
             {id(item) for item in model._data} if model is not None else set()
         )
+        official_available = (
+            {
+                id(item): item.get("Available", "")
+                for item in model._data
+                if self._is_winget_update_item(item)
+            }
+            if model is not None
+            else {}
+        )
+
         super()._detective_job_succeeded(results)
         model = self.proxy_model.sourceModel()
         if model is None:
             return
+
+        restored = False
         for item in model._data:
-            if id(item) not in existing_objects:
+            item_id = id(item)
+            if item_id in official_available:
+                official = official_available[item_id]
+                if item.get("Available", "") != official:
+                    item["Available"] = official
+                    restored = True
+            elif item_id not in existing_objects:
                 item["UpdateSource"] = "detective"
+                item.setdefault("Source", "detective")
+        if restored:
+            model.layoutChanged.emit()
 
     @staticmethod
     def _package_ref_for_winget_item(item):
@@ -278,3 +308,15 @@ class ProductionMainWindow(HardenedMainWindow):
                 len(refs),
             )
             self.batch_update(refs)
+
+    # ── Shutdown persistence ─────────────────────────
+
+    def closeEvent(self, event):
+        if (
+            not self._is_closing
+            and hasattr(self, "_pat_save_timer")
+            and self._pat_save_timer.isActive()
+        ):
+            self._pat_save_timer.stop()
+            ConfigManager().github_pat = self._pending_pat
+        super().closeEvent(event)
