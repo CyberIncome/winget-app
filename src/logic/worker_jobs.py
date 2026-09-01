@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 
 def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
+    """Execute one operation and serialize success/failure across the process."""
     try:
         result_queue.put({"ok": True, "value": operation()})
     except BaseException as exc:  # child boundary: serialize any failure
@@ -51,7 +52,9 @@ def winget_parse_worker(output: str, result_queue) -> None:
     _run_worker(result_queue, operation)
 
 
-def detective_worker(data: list[dict], url_fallbacks: dict, result_queue) -> None:
+def detective_worker(
+    data: list[dict], url_fallbacks: dict, result_queue
+) -> None:
     """Run remote version detection in an isolated process."""
 
     def operation():
@@ -63,10 +66,10 @@ def detective_worker(data: list[dict], url_fallbacks: dict, result_queue) -> Non
 
 
 def github_rate_limit_worker(pat: str, result_queue) -> None:
-    """Fetch GitHub rate-limit information without a GUI-owned network thread."""
+    """Fetch GitHub rate-limit information through the hardened transport."""
 
     def operation():
-        import requests
+        from src.logic.http_safety import safe_get
 
         headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -74,7 +77,7 @@ def github_rate_limit_worker(pat: str, result_queue) -> None:
         }
         if pat:
             headers["Authorization"] = f"Bearer {pat}"
-        response = requests.get(
+        response = safe_get(
             "https://api.github.com/rate_limit",
             headers=headers,
             timeout=5,
