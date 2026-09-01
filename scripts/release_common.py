@@ -11,22 +11,56 @@ import struct
 ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 VERSION_FILE = ROOT / "VERSION"
+BUILD_VERSION_FILE = DIST_DIR / "BUILD_VERSION"
 
-_SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$"
-)
+_CORE_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(.*)$")
+_IDENTIFIER_RE = re.compile(r"^[0-9A-Za-z-]+$")
+_MAX_WINDOWS_VERSION_PART = 65535
+
+
+def _validate_identifiers(value: str, *, numeric_leading_zero: bool) -> None:
+    for identifier in value.split("."):
+        if not identifier or not _IDENTIFIER_RE.fullmatch(identifier):
+            raise ValueError("invalid semantic-version identifier")
+        if (
+            numeric_leading_zero
+            and identifier.isdigit()
+            and len(identifier) > 1
+            and identifier.startswith("0")
+        ):
+            raise ValueError("numeric prerelease identifiers cannot have leading zeros")
 
 
 def parse_version(value: str) -> tuple[str, tuple[int, int, int, int]]:
-    """Validate release text and return public/numeric versions."""
+    """Validate SemVer release text and return public/numeric Windows versions."""
     version = value.strip()
-    match = _SEMVER_RE.fullmatch(version)
+    match = _CORE_RE.fullmatch(version)
     if not match:
         raise ValueError(
             "VERSION must use semantic versioning such as 1.0.0 or 1.2.3-rc.1"
         )
+
     major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
+    if any(part > _MAX_WINDOWS_VERSION_PART for part in (major, minor, patch)):
+        raise ValueError("VERSION components must be <= 65535 for Windows metadata")
+
+    suffix = match.group(4)
+    prerelease = ""
+    build = ""
+    if suffix:
+        remaining = suffix
+        if remaining.startswith("-"):
+            remaining = remaining[1:]
+            prerelease, separator, build = remaining.partition("+")
+            _validate_identifiers(prerelease, numeric_leading_zero=True)
+            if separator:
+                _validate_identifiers(build, numeric_leading_zero=False)
+        elif remaining.startswith("+"):
+            build = remaining[1:]
+            _validate_identifiers(build, numeric_leading_zero=False)
+        else:
+            raise ValueError("invalid semantic-version suffix")
+
     return version, (major, minor, patch, 0)
 
 
@@ -39,6 +73,25 @@ def read_version() -> tuple[str, tuple[int, int, int, int]]:
 
 def numeric_version_text(numeric: tuple[int, int, int, int]) -> str:
     return ".".join(str(part) for part in numeric)
+
+
+def write_build_version(version: str) -> Path:
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
+    BUILD_VERSION_FILE.write_text(version + "\n", encoding="utf-8")
+    return BUILD_VERSION_FILE
+
+
+def require_build_version(expected_version: str) -> None:
+    if not BUILD_VERSION_FILE.is_file():
+        raise FileNotFoundError(
+            f"Missing {BUILD_VERSION_FILE}; rebuild the PyInstaller artifacts first."
+        )
+    actual = BUILD_VERSION_FILE.read_text(encoding="utf-8").strip()
+    if actual != expected_version:
+        raise ValueError(
+            f"Packaged artifacts were built for {actual!r}, expected {expected_version!r}. "
+            "Rebuild before creating or publishing a release."
+        )
 
 
 def require_files(paths: list[Path]) -> None:

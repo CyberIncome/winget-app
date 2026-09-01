@@ -8,17 +8,13 @@ import os
 from pathlib import Path
 import shutil
 
+from release_common import read_version, require_x64_pe, write_build_version
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 BUILD_DIR = ROOT / "build"
 SPEC_DIR = BUILD_DIR / "spec"
-
-
-def _read_version() -> tuple[str, tuple[int, int, int, int]]:
-    from release_common import read_version
-
-    return read_version()
 
 
 def _require_windows() -> None:
@@ -38,7 +34,7 @@ def _pyinstaller_run(arguments: list[str]) -> None:
 
 
 def _version_file(name: str, description: str) -> Path:
-    version, numeric = _read_version()
+    version, numeric = read_version()
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     destination = BUILD_DIR / f"pyinstaller-version-{name}.txt"
     numeric_tuple = repr(numeric)
@@ -153,7 +149,11 @@ def main() -> int:
             "Build completed without expected artifact(s): " + ", ".join(missing)
         )
 
-    print("Built artifacts:")
+    require_x64_pe(artifacts)
+    version, _numeric = read_version()
+    write_build_version(version)
+
+    print("Built AMD64 artifacts:")
     for artifact in artifacts:
         print(f"  {artifact} ({artifact.stat().st_size:,} bytes)")
     return 0

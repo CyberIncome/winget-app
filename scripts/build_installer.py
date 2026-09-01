@@ -14,6 +14,7 @@ from release_common import (
     ROOT,
     numeric_version_text,
     read_version,
+    require_build_version,
     require_x64_pe,
 )
 
@@ -25,7 +26,7 @@ SETUP_EXE = DIST_DIR / "WingetUniversalDashboard-Setup-x64.exe"
 
 
 def find_iscc() -> Path:
-    """Find Inno Setup's command-line compiler using explicit/common paths."""
+    """Find Inno Setup 7's command-line compiler."""
     explicit = os.getenv("INNO_SETUP_COMPILER", "").strip()
     candidates: list[Path] = []
     if explicit:
@@ -71,6 +72,7 @@ def build_installer() -> Path:
         raise SystemExit(f"Installer script is missing: {INSTALLER_SCRIPT}")
 
     version, numeric = read_version()
+    require_build_version(version)
     require_x64_pe([GUI_EXE, CLI_EXE])
 
     compiler = find_iscc()

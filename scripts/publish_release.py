@@ -7,7 +7,13 @@ import argparse
 import shutil
 import subprocess
 
-from release_common import DIST_DIR, ROOT, read_version, require_files
+from release_common import (
+    DIST_DIR,
+    ROOT,
+    read_version,
+    require_build_version,
+    require_files,
+)
 
 
 REPOSITORY = "CyberIncome/winget-app"
@@ -65,6 +71,7 @@ def main() -> int:
     version, _numeric = read_version()
     tag = f"v{version}"
     head = _require_clean_master(args.allow_non_master)
+    require_build_version(version)
     require_files(ASSETS)
 
     if subprocess.run([gh, "auth", "status"], cwd=ROOT, check=False).returncode != 0:
@@ -96,7 +103,7 @@ def main() -> int:
     ]
     if not args.publish:
         command.append("--draft")
-    if args.prerelease:
+    if args.prerelease or "-" in version:
         command.append("--prerelease")
 
     print("$", subprocess.list2cmdline(command))
