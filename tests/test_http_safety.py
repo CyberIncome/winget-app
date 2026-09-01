@@ -124,6 +124,31 @@ def test_cross_origin_redirect_drops_explicit_secrets():
     assert second_headers["Accept"] == "application/json"
 
 
+def test_cross_origin_redirect_drops_auth_and_cookie_kwargs():
+    session = FakeSession(
+        [
+            FakeResponse(
+                302,
+                {"Location": "https://cdn.example.net/release"},
+            ),
+            FakeResponse(200),
+        ]
+    )
+    safe_get(
+        "https://api.example.com/start",
+        session=session,
+        auth=("user", "secret"),
+        cookies={"session": "secret"},
+    )
+
+    first_kwargs = session.calls[0][1]
+    second_kwargs = session.calls[1][1]
+    assert first_kwargs["auth"] == ("user", "secret")
+    assert first_kwargs["cookies"] == {"session": "secret"}
+    assert "auth" not in second_kwargs
+    assert "cookies" not in second_kwargs
+
+
 def test_same_origin_redirect_keeps_authorization():
     session = FakeSession(
         [
