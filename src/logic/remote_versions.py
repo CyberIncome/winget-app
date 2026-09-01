@@ -8,7 +8,11 @@ from urllib.parse import urlparse
 
 from src.logic.config import ConfigManager
 from src.logic.http_safety import is_safe_https_url, safe_get
-from src.logic.parser import is_valid_version, is_version_newer
+from src.logic.parser import (
+    is_valid_version,
+    is_version_newer,
+    parse_version_tuple,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -19,6 +23,11 @@ def _newer_or_unknown_install(version: str, installed_version) -> bool:
     return installed_version is None or is_version_newer(
         version, installed_version
     )
+
+
+def _version_sort_key(version: str) -> tuple[int, int, int, int]:
+    parsed = parse_version_tuple(version) or ()
+    return tuple(parsed[:4]) + (0,) * (4 - len(parsed[:4]))
 
 
 def _github_repo_parts(url: str) -> tuple[str, str] | None:
@@ -115,12 +124,15 @@ def _generic_latest_version(
         r"[vV]?(\d+\.\d+(?:\.\d+){0,2})\b",
         response.text,
     )
-    for version in versions:
-        if not is_valid_version(version):
-            continue
-        if _newer_or_unknown_install(version, installed_version):
-            return version
-    return None
+    candidates = {
+        version
+        for version in versions
+        if is_valid_version(version)
+        and _newer_or_unknown_install(version, installed_version)
+    }
+    if not candidates:
+        return None
+    return max(candidates, key=_version_sort_key)
 
 
 def check_remote_version(url, installed_version=None):
