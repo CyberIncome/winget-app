@@ -17,6 +17,7 @@ from PySide6.QtCore import QProcess
 
 from src.ui.process_jobs import ManagedProcessJob
 from src.ui.production_window import ProductionMainWindow
+from src.ui.runtime_window import RuntimeMainWindow
 from tests._windows_worker_targets import (
     exit_without_result,
     sleep_then_succeed,
@@ -39,6 +40,17 @@ def _make_window(qtbot, monkeypatch):
         lambda self: None,
     )
     window = ProductionMainWindow()
+    qtbot.addWidget(window)
+    return window
+
+
+def _make_runtime_window(qtbot, monkeypatch):
+    monkeypatch.setattr(
+        RuntimeMainWindow,
+        "startup_sequence",
+        lambda self: None,
+    )
+    window = RuntimeMainWindow()
     qtbot.addWidget(window)
     return window
 
@@ -205,8 +217,8 @@ def test_watchdog_hard_timeout_kills_without_retry(qtbot, monkeypatch):
     assert "update" not in window._active_tasks
 
 
-def test_window_close_cancels_owned_spawned_job(qtbot, monkeypatch):
-    window = _make_window(qtbot, monkeypatch)
+def test_runtime_window_close_cancels_owned_spawned_job(qtbot, monkeypatch):
+    window = _make_runtime_window(qtbot, monkeypatch)
     started = window._start_job(
         "integration-close",
         sleep_then_succeed,
