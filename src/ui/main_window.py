@@ -6,14 +6,54 @@ production hardening layer. Run this module directly only through the canonical
 ``src.main`` entry point below.
 """
 
+from PySide6.QtCore import QModelIndex, Qt
+
 from src.ui.legacy_window import (
     ConsoleLogHandler,
     CustomSortProxy,
     GuiConsoleFilter,
     MainWindow,
     StatCard,
-    UpdateModel,
+    UpdateModel as LegacyUpdateModel,
 )
+
+
+class UpdateModel(LegacyUpdateModel):
+    """Flat table model with defensive Qt index bounds."""
+
+    def rowCount(self, parent=QModelIndex()):
+        if parent.isValid():
+            return 0
+        return len(self._data)
+
+    def columnCount(self, parent=QModelIndex()):
+        if parent.isValid():
+            return 0
+        return len(self.headers)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        if not 0 <= index.row() < len(self._data):
+            return None
+        if not 0 <= index.column() < len(self.headers):
+            return None
+        return super().data(index, role)
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if not index.isValid():
+            return False
+        if not 0 <= index.row() < len(self._data):
+            return False
+        if not 0 <= index.column() < len(self.headers):
+            return False
+        return super().setData(index, value, role)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and not 0 <= section < len(self.headers):
+            return None
+        return super().headerData(section, orientation, role)
+
 
 __all__ = [
     "ConsoleLogHandler",
