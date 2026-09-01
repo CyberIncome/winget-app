@@ -96,6 +96,75 @@ class ProductionMainWindow(HardenedMainWindow):
             "Update every package proven upgradeable by the current Winget scan"
         )
 
+    # ── Managed job result safety ───────────────────
+
+    def _start_job(
+        self,
+        name,
+        target,
+        args=(),
+        timeout=180,
+        on_success=None,
+        on_failure=None,
+    ):
+        guarded_success = None
+        if on_success is not None:
+            guarded_success = lambda value: self._dispatch_job_success(
+                name,
+                value,
+                on_success,
+                on_failure,
+            )
+        return super()._start_job(
+            name,
+            target,
+            args=args,
+            timeout=timeout,
+            on_success=guarded_success,
+            on_failure=on_failure,
+        )
+
+    def _dispatch_job_success(
+        self,
+        name,
+        value,
+        callback,
+        failure_callback=None,
+    ):
+        """Convert result-handling exceptions into explicit job failures."""
+        if self._is_closing:
+            return
+        try:
+            callback(value)
+        except Exception as exc:
+            message = f"{name} result handling failed: {exc}"
+            self.logger.exception(message)
+            self._handle_job_failure(
+                name,
+                message,
+                failure_callback,
+            )
+
+    def _handle_job_failure(self, name, message, callback=None):
+        """Run failure recovery without allowing its callback to wedge state."""
+        if self._is_closing:
+            return
+        self.logger.error("Background job failed: %s", message)
+        self.append_log(f"\n[!] {message}")
+        if callback is None:
+            return
+        try:
+            callback(message)
+        except Exception as exc:
+            self.logger.exception(
+                "Failure recovery callback crashed for %s: %s",
+                name,
+                exc,
+            )
+            self.append_log(
+                f"\n[!] Failure recovery for {name} also failed: {exc}"
+            )
+
     # ── QProcess generation safety ──────────────────
 
     def handle_process_error(self, error):
