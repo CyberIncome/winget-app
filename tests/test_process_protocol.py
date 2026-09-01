@@ -61,7 +61,8 @@ def test_refresh_stdout_overflow_is_not_parsed_as_truncated_table(
 
     window._capture_refresh_stdout(b"Name Id Version Available")
 
-    assert window._process_stdout_overflow is True
+    assert window._process_stdout_invalid_reason is not None
+    assert "exceeded" in window._process_stdout_invalid_reason
     assert len(window._process_stdout_bytes) == 16
 
     captured = {}
@@ -79,7 +80,28 @@ def test_refresh_stdout_overflow_is_not_parsed_as_truncated_table(
 
     assert captured["name"] == "winget-parse"
     assert captured["args"] == ("",)
-    assert "exceeded the safety limit" in window.console.toPlainText()
+    assert "output is invalid" in window.console.toPlainText()
+
+
+def test_refresh_stdout_read_failure_invalidates_scan(qtbot):
+    window = _make_window(qtbot)
+    window.current_operation = "refresh"
+    window._process_stdout_bytes.extend(b"partial table")
+
+    class BrokenProcess:
+        def readAllStandardOutput(self):
+            raise RuntimeError("stdout handle raced")
+
+    original_process = window.process
+    window.process = BrokenProcess()
+    try:
+        window.handle_stdout()
+    finally:
+        window.process = original_process
+
+    assert window._process_stdout_invalid_reason is not None
+    assert "stdout handling failed" in window._process_stdout_invalid_reason
+    assert "stdout handle raced" in window._process_stdout_invalid_reason
 
 
 def test_finished_callback_exception_aborts_update_and_restores_idle(
