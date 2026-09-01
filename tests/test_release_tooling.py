@@ -18,9 +18,16 @@ from release_common import numeric_version_text, parse_version  # noqa: E402
 
 def test_version_file_is_valid_semver():
     version, numeric = parse_version((ROOT / "VERSION").read_text(encoding="utf-8"))
-    assert version == "1.0.0"
-    assert numeric == (1, 0, 0, 0)
-    assert numeric_version_text(numeric) == "1.0.0.0"
+    raw = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert version == raw
+    core = tuple(
+        int(part)
+        for part in version.split("-", 1)[0].split("+", 1)[0].split(".")
+    )
+    assert numeric == (*core, 0)
+    assert numeric_version_text(numeric) == ".".join(
+        str(part) for part in (*core, 0)
+    )
 
 
 @pytest.mark.parametrize(
@@ -37,6 +44,7 @@ def test_inno_script_is_x64compatible_per_user_and_stable_id():
         encoding="utf-8"
     )
     assert "AppId={{C41A014A-142E-43E7-AB8F-07AC4479E07F}" in source
+    assert "SetupArchitecture=x64" in source
     assert "ArchitecturesAllowed=x64compatible" in source
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in source
     assert "DefaultDirName={localappdata}\\Programs\\WingetUniversalDashboard" in source

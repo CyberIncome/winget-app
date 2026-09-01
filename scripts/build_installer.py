@@ -45,8 +45,6 @@ def find_iscc() -> Path:
             [
                 base_path / "Inno Setup 7" / "ISCC.exe",
                 base_path / "Programs" / "Inno Setup 7" / "ISCC.exe",
-                base_path / "Inno Setup 6" / "ISCC.exe",
-                base_path / "Programs" / "Inno Setup 6" / "ISCC.exe",
             ]
         )
 
@@ -88,7 +86,8 @@ def build_installer() -> Path:
         raise SystemExit(f"Inno Setup failed with exit code {completed.returncode}")
     if not SETUP_EXE.is_file():
         raise SystemExit(f"Installer compiler did not create: {SETUP_EXE}")
-    print(f"Built installer: {SETUP_EXE} ({SETUP_EXE.stat().st_size:,} bytes)")
+    require_x64_pe([SETUP_EXE])
+    print(f"Built x64 installer: {SETUP_EXE} ({SETUP_EXE.stat().st_size:,} bytes)")
     return SETUP_EXE
 
 
