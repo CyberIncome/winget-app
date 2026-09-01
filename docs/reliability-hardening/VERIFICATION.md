@@ -1,6 +1,6 @@
 # Reliability Hardening Verification
 
-Status: **IMPLEMENTATION / STATIC / PURE-PYTHON AUDIT COMPLETE — NATIVE WINDOWS ACCEPTANCE PENDING**
+Status: **IMPLEMENTATION / STATIC / PURE-PYTHON AUDIT COMPLETE — NATIVE WINDOWS ACCEPTANCE REPAIR LOOP, RERUN PENDING**
 
 Branch: `audit/ferrox-reliability-hardening`
 Base: `master@fedd09ec7e84f91e22760ca7f3736e9db978db48`
@@ -20,28 +20,28 @@ Canonical GUI path:
 | Must-have | Status | Evidence |
 | --- | --- | --- |
 | No untracked production daemon threads | VERIFIED | Production inheritance overrides the legacy thread-launch paths; static contract test enumerates them. |
-| Spawned jobs have timeout/cancel/cleanup | VERIFIED + WINDOWS-VERIFY integration | `ManagedProcessJob` uses owned spawn processes, one-result envelopes, bounded timeout, terminate/join/kill/close escalation, and queue cleanup. Native spawn acceptance remains Windows-specific. |
-| Final shutdown contains child/process teardown failures | WINDOWS-VERIFY | `RuntimeMainWindow` contains state/terminate/wait/kill failures and cancels managed jobs; hostile-QProcess tests and real Windows close-during-spawn tests are committed. |
+| Spawned jobs have timeout/cancel/cleanup | VERIFIED + WINDOWS | `ManagedProcessJob` uses owned spawn processes, one-result envelopes, bounded timeout, terminate/join/kill/close escalation, and queue cleanup. First native Windows lifecycle run passed. |
+| Final shutdown contains child/process teardown failures | VERIFIED + WINDOWS | `RuntimeMainWindow` contains state/terminate/wait/kill failures and cancels managed jobs; hostile-QProcess tests and real Windows close-during-spawn tests passed in the native lifecycle run. |
 | Startup is staged | VERIFIED | refresh -> parse -> inventory -> detective -> API. |
-| QProcess outcomes are distinct | WINDOWS-VERIFY | FailedToStart, CrashExit, watchdog timeout, normal non-zero failure, and success have separate state paths; native signal ordering remains Windows evidence. |
-| Crash/timeout never becomes silent retry | WINDOWS-VERIFY | Retry predicate permits only normal non-zero installer failure; native tests cover crash/kill/timeout. |
+| QProcess outcomes are distinct | VERIFIED + WINDOWS | FailedToStart, CrashExit, watchdog timeout, normal non-zero failure, and success have separate state paths; native lifecycle tests passed. |
+| Crash/timeout never becomes silent retry | VERIFIED + WINDOWS | Retry predicate permits only normal non-zero installer failure; native crash/kill/timeout tests passed. |
 | Watchdog does not kill only because output is quiet | VERIFIED | Idle time only logs; hard termination uses total elapsed deadline. |
-| Foreground operations are mutually excluded | VERIFIED + WINDOWS-VERIFY UI | Production blocks overlapping refresh/inventory/update foreground requests; Qt interaction is covered by committed tests. |
-| Refresh protocol output is bounded and fail-closed | VERIFIED + WINDOWS-VERIFY QProcess | GUI retains at most 5 MiB authoritative stdout bytes; read/overflow invalidates the scan instead of parsing a truncated table. |
-| Live console memory is bounded | VERIFIED + WINDOWS-VERIFY Qt | Canonical runtime retains 2,000 console blocks and production bounds a never-terminated live line to 16 KiB. |
-| CLI captured output is bounded | VERIFIED | Disk-backed stdout/stderr capture, 5 MiB per stream, overflow is explicit non-success. |
+| Foreground operations are mutually excluded | VERIFIED + WINDOWS | Production blocks overlapping refresh/inventory/update foreground requests; the full Windows pytest suite passed. |
+| Refresh protocol output is bounded and fail-closed | VERIFIED + WINDOWS | GUI retains at most 5 MiB authoritative stdout bytes; read/overflow invalidates the scan instead of parsing a truncated table. Full Windows pytest suite passed. |
+| Live console memory is bounded | VERIFIED + WINDOWS | Canonical runtime retains 2,000 console blocks and production bounds a never-terminated live line to 16 KiB. Full Windows pytest suite passed. |
+| CLI captured output is bounded | VERIFIED + WINDOWS | Disk-backed stdout/stderr capture, 5 MiB per stream, overflow is explicit non-success; full Windows pytest suite passed. |
 | Malformed/partial Winget tables fail closed | VERIFIED | Current exact parser test blob passes malformed, partial, empty, localized and Unicode-width cases. |
 | Localized/CJK table layout is handled safely | VERIFIED | Display-cell parser passes German and CJK fixtures and rejects a simulated ambiguous-width boundary shift. |
-| Package/source provenance is retained | VERIFIED + WINDOWS-VERIFY Qt | Source participates in checkbox identity, refs, deduplication, exact commands and row removal. |
-| Registry inventory IDs are never Winget authority | VERIFIED | Inventory update mapping ignores registry IDs and requires a unique authoritative Winget-name match. |
-| Detective-only findings cannot become update authority | VERIFIED + WINDOWS-VERIFY Qt | Detective rows are tagged informational and excluded from executable refs unless independently backed by current Winget output. |
+| Package/source provenance is retained | VERIFIED + WINDOWS | Source participates in checkbox identity, refs, deduplication, exact commands and row removal; full Windows pytest suite passed. |
+| Registry inventory IDs are never Winget authority | VERIFIED + WINDOWS | Inventory update mapping ignores registry IDs and requires a unique authoritative Winget-name match; full Windows pytest suite passed. |
+| Detective-only findings cannot become update authority | VERIFIED + WINDOWS | Detective rows are tagged informational and excluded from executable refs unless independently backed by current Winget output; Windows tests passed. |
 | Package selectors reject ambiguous/control values | VERIFIED | IDs reject truncation, leading dash, ASCII controls and invalid grammar; names/sources reject option-like/control values. |
 | Config defaults/writes are safe | VERIFIED by unchanged validated blobs | Deep-copy state, atomic temp+fsync+replace, corrupt quarantine and guarded PAT migration. |
-| PAT edits are debounced and flushed on close | WINDOWS-VERIFY | Qt debounce plus final runtime close flush; credential-store behavior needs Windows. |
-| HTTPS redirects/body/credentials are bounded | VERIFIED by unchanged validated blobs | HTTPS-only absolute URLs, redirect/body caps, cross-origin secret header/auth/cookie stripping. |
-| Session/crash diagnostics exist | WINDOWS-VERIFY | Session IDs, rotating logs, exception hooks and faulthandler are implemented; native crash production requires Windows. |
+| PAT edits are debounced and flushed on close | VERIFIED + WINDOWS tests | Qt debounce plus final runtime close flush is covered by the passing Windows suite; manual credential-store interaction remains a manual acceptance scenario. |
+| HTTPS redirects/body/credentials are bounded | VERIFIED + WINDOWS tests | HTTPS-only absolute URLs, redirect/body caps, cross-origin secret header/auth/cookie stripping; native remote-version suite passed. |
+| Session/crash diagnostics exist | WINDOWS manual | Session IDs, rotating logs, exception hooks and faulthandler are implemented; real crash-log production remains a manual scenario. |
 | Runtime/dev/build dependencies are separated and bounded | VERIFIED | `requirements.txt` and `requirements-dev.txt`; PyInstaller is dev-only. |
-| Packaged build is reproducible from repo tooling | WINDOWS-VERIFY | `scripts/build_windows.py` creates GUI/CLI one-file artifacts and `verify_windows.py --build` launch-smokes both. |
+| Packaged build is reproducible from repo tooling | VERIFIED + WINDOWS BUILD | First Windows acceptance attempt built both one-file artifacts successfully; packaged CLI and packaged GUI smoke both passed. |
 | No tracked bytecode / no required GitHub Actions | VERIFIED | Recursive tree/diff inspection; caches removed/ignored and no workflow is required. |
 
 ## Fresh current-blob executable evidence — 2026-09-01
@@ -67,11 +67,44 @@ Fresh results:
 
 - executor / selector / decoder / bounded command-runner gate: **50 passed**;
 - strict localized Winget parser gate after final repair: **15 passed**;
-- total fresh exact-current-blob tests in the final loop: **65 passed**.
+- total fresh exact-current-blob tests in the final audit-host loop: **65 passed**.
 
 The final parser gate was intentionally **not** green on its first run: 14 passed / 1 failed because an over-strict new column-boundary invariant rejected the legitimate German truncated-ID fixture. The invariant was repaired to reject only boundaries that split two adjacent non-space characters. The updated parser source hash matched GitHub and the full exact parser suite then passed 15/15. This failure/repair is retained as verification evidence rather than hidden.
 
 Earlier pure-Python config and HTTP gates remain applicable because those source/test blobs did not change afterward; the final tree SHA continuity check confirmed those validated modules were unchanged.
+
+## First native Windows acceptance attempt — 2026-09-01
+
+Environment supplied by the Windows acceptance run:
+
+- Windows `10.0.26200.9278`;
+- Python `3.12.10`;
+- PySide6 `6.11.2`;
+- pywin32 `312`;
+- requests `2.34.2`;
+- click `8.5.0`;
+- keyring `25.7.0`;
+- pytest `9.1.1`;
+- pytest-qt `4.5.0`;
+- Ruff `0.16.5`;
+- PyInstaller `6.22.2`;
+- Winget `v1.29.290`.
+
+Results from `python scripts\verify_windows.py --live-winget --build`:
+
+- compile all Python sources: **PASS**;
+- Ruff correctness checks: **PASS**;
+- native Windows lifecycle integration: **19 passed**;
+- complete pytest/pytest-qt suite: **180 passed**;
+- source CLI `--help` smoke: **PASS**;
+- direct `scripts/smoke_gui.py`: **FAILED** before application import because Python set `scripts` rather than the repository root as `sys.path[0]`;
+- `winget --version`: **PASS**;
+- real read-only Winget update scan: **PASS**;
+- PyInstaller GUI + CLI build: **PASS**;
+- packaged CLI smoke: **PASS**;
+- packaged GUI create/close smoke: **PASS**.
+
+The one failed check was therefore a defect in the verification harness, not a failed application/runtime boundary. `scripts/smoke_gui.py` now inserts its repository root into `sys.path` before importing `src`, and `tests/test_hardened_source.py` contains a regression invariant requiring that bootstrap to precede the application import. A rerun from the updated branch is required before the aggregate Windows verdict is changed to PASS.
 
 ## Repository-state evidence
 
@@ -92,23 +125,29 @@ These are recorded rather than silently expanded into late risky rewrites:
 - The bounded HTTPS policy is not full SSRF isolation. It rejects unsafe schemes, credentials and unsafe redirects, but does not resolve hostnames and deny private/link-local destination IPs. A correct DNS/IP-aware policy should be a separate networking hardening change rather than a string blacklist.
 - Localized no-update messages are recognized only for known English markers. Unknown localized no-update prose fails closed instead of claiming zero updates. This favors correctness over convenience until Winget exposes a structured upgrade result.
 
-## Required Windows acceptance
+## Required Windows acceptance rerun
 
-From this exact branch on Windows:
+Update the local checkout to the latest audit branch, then rerun:
 
 ```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements-dev.txt
+git checkout audit/ferrox-reliability-hardening
+git pull
 python scripts\verify_windows.py --live-winget --build
 ```
 
-Then complete the manual crash-boundary checks in `WINDOWS-VERIFICATION.md`.
+Because the first run already proved both packaged artifacts build and launch, a quicker repair-loop check may first run:
+
+```powershell
+python scripts\smoke_gui.py
+python -m pytest -q
+```
+
+The final acceptance verdict should still come from the full verification command after the branch update.
 
 Until that succeeds:
 
 - implementation/static/pure-Python audit: **PASS**;
-- native Windows acceptance: **PENDING**;
-- packaged Windows acceptance: **PENDING**;
-- merge/release recommendation: **HOLD FOR WINDOWS ACCEPTANCE**.
+- native Windows application tests: **PASS in first run**;
+- packaged Windows build/smoke: **PASS in first run**;
+- aggregate verification harness: **RERUN PENDING after smoke-path repair**;
+- merge/release recommendation: **HOLD UNTIL RERUN PASSES**.
