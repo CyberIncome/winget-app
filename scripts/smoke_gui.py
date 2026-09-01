@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create, show, and cleanly close the production window without running scans."""
+"""Create, show, and cleanly close the canonical runtime window without scans."""
 
 from __future__ import annotations
 
@@ -8,13 +8,13 @@ import sys
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from src.ui.production_window import ProductionMainWindow
+from src.ui.runtime_window import RuntimeMainWindow
 
 
 def main() -> int:
-    """Exercise production Qt construction and shutdown on the local machine."""
+    """Exercise runtime Qt construction and shutdown on the local machine."""
     app = QApplication.instance() or QApplication(sys.argv)
-    window = ProductionMainWindow()
+    window = RuntimeMainWindow()
     window.show()
 
     # MainWindow normally schedules startup after 500 ms. Close before that
@@ -24,7 +24,7 @@ def main() -> int:
     QTimer.singleShot(350, app.quit)
     exit_code = app.exec()
     if not window._is_closing:
-        raise RuntimeError("production window did not execute clean shutdown")
+        raise RuntimeError("runtime window did not execute clean shutdown")
     return exit_code
 
 
