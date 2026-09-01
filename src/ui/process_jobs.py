@@ -82,37 +82,9 @@ class ManagedProcessJob(QObject):
         if self._done:
             return
 
-        envelope = None
-        if self._queue is not None:
-            try:
-                envelope = self._queue.get_nowait()
-            except Empty:
-                pass
-            except (EOFError, OSError, ValueError) as exc:
-                self._finish_failure(
-                    f"{self.name} result queue failed: {exc}"
-                )
-                return
-
+        envelope = self._read_envelope_nowait()
         if envelope is not None:
-            if envelope.get("ok"):
-                value = envelope.get("value")
-                self._cleanup_process(grace_seconds=0.5)
-                self._done = True
-                self._logger.info("JOB SUCCESS name=%s", self.name)
-                self.succeeded.emit(self.name, value)
-                self.finished.emit(self.name)
-                return
-            detail = envelope.get("error") or "unknown worker error"
-            trace = envelope.get("traceback")
-            if trace:
-                self._logger.error(
-                    "JOB CHILD TRACE name=%s\n%s", self.name, trace
-                )
-            self._finish_failure(
-                f"{self.name} failed "
-                f"({envelope.get('error_type', 'Error')}): {detail}"
-            )
+            self._consume_envelope(envelope)
             return
 
         elapsed = time.monotonic() - self._started_at
@@ -124,33 +96,65 @@ class ManagedProcessJob(QObject):
             )
             return
 
-        if self._process is not None and not self._process.is_alive():
-            exit_code = self._process.exitcode
-            try:
-                if self._queue is not None:
-                    envelope = self._queue.get(timeout=0.05)
-            except (Empty, EOFError, OSError, ValueError):
-                envelope = None
-            if envelope is not None:
-                if envelope.get("ok"):
-                    value = envelope.get("value")
-                    self._cleanup_process()
-                    self._done = True
-                    self._logger.info(
-                        "JOB SUCCESS name=%s", self.name
-                    )
-                    self.succeeded.emit(self.name, value)
-                    self.finished.emit(self.name)
-                    return
-                detail = envelope.get("error") or "unknown worker error"
-                self._finish_failure(
-                    f"{self.name} failed: {detail}"
-                )
-                return
+        process = self._process
+        if process is None or process.is_alive():
+            return
+
+        exit_code = process.exitcode
+        envelope = self._read_envelope_wait(0.05)
+        if envelope is not None:
+            self._consume_envelope(envelope)
+            return
+        self._finish_failure(
+            f"{self.name} exited without a result "
+            f"(exit code {exit_code})"
+        )
+
+    def _read_envelope_nowait(self):
+        if self._queue is None:
+            return None
+        try:
+            return self._queue.get_nowait()
+        except Empty:
+            return None
+        except (EOFError, OSError, ValueError) as exc:
             self._finish_failure(
-                f"{self.name} exited without a result "
-                f"(exit code {exit_code})"
+                f"{self.name} result queue failed: {exc}"
             )
+            return None
+
+    def _read_envelope_wait(self, timeout):
+        if self._queue is None:
+            return None
+        try:
+            return self._queue.get(timeout=timeout)
+        except (Empty, EOFError, OSError, ValueError):
+            return None
+
+    def _consume_envelope(self, envelope: dict) -> None:
+        if self._done:
+            return
+        if envelope.get("ok"):
+            value = envelope.get("value")
+            # Once a worker has emitted its only result it should be exiting.
+            # Give it a grace window, then terminate/kill if it lingers.
+            self._cleanup_process(grace_seconds=0.5)
+            self._done = True
+            self._logger.info("JOB SUCCESS name=%s", self.name)
+            self.succeeded.emit(self.name, value)
+            self.finished.emit(self.name)
+            return
+
+        detail = envelope.get("error") or "unknown worker error"
+        trace = envelope.get("traceback")
+        if trace:
+            self._logger.error(
+                "JOB CHILD TRACE name=%s\n%s", self.name, trace
+            )
+        self._finish_failure(
+            f"{self.name} failed "
+            f"({envelope.get('error_type', 'Error')}): {detail}"
+        )
 
     def cancel(self, reason: str = "cancelled") -> None:
         if self._done:
@@ -161,6 +165,7 @@ class ManagedProcessJob(QObject):
         self._timer.stop()
         self._cleanup_process(terminate=True)
         self._done = True
+        self.finished.emit(self.name)
 
     def _finish_failure(self, message: str, terminate: bool = False) -> None:
         if self._done:
@@ -179,6 +184,7 @@ class ManagedProcessJob(QObject):
         terminate: bool = False,
         grace_seconds: float = 0.2,
     ) -> None:
+        """Boundedly stop/close the process and its result queue."""
         self._timer.stop()
         process = self._process
         if process is not None:
@@ -190,6 +196,14 @@ class ManagedProcessJob(QObject):
                 process.join(timeout=grace_seconds)
                 if process.is_alive():
                     self._logger.warning(
+                        "JOB LINGER TERMINATE name=%s pid=%s",
+                        self.name,
+                        process.pid,
+                    )
+                    process.terminate()
+                    process.join(timeout=0.5)
+                if process.is_alive():
+                    self._logger.error(
                         "JOB FORCE KILL name=%s pid=%s",
                         self.name,
                         process.pid,
