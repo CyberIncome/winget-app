@@ -287,36 +287,28 @@ class ProductionMainWindow(HardenedMainWindow):
         ]
 
     def _winget_refs_for_inventory_items(self, inventory_items):
-        """Map registry inventory rows back to proven Winget upgrade rows."""
+        """Map registry inventory names to unique authoritative Winget rows."""
         update_model = self.proxy_model.sourceModel()
         if update_model is None:
             return []
 
-        by_id = {}
+        # Registry uninstall subkeys are local inventory identifiers, not
+        # Winget package provenance. Never use them to select a Winget row.
         by_name = {}
         for update_item in update_model._data:
             if not self._is_winget_update_item(update_item):
                 continue
-            package_id = str(update_item.get("Id") or "").strip().lower()
             name = str(update_item.get("Name") or "").strip().lower()
-            if package_id:
-                by_id.setdefault(package_id, []).append(update_item)
             if name:
                 by_name.setdefault(name, []).append(update_item)
 
         refs = []
         seen = set()
         for inventory_item in inventory_items:
-            package_id = str(
-                inventory_item.get("Id") or ""
-            ).strip().lower()
             name = str(
                 inventory_item.get("Name") or ""
             ).strip().lower()
-
-            candidates = by_id.get(package_id, []) if package_id else []
-            if len(candidates) != 1:
-                candidates = by_name.get(name, []) if name else []
+            candidates = by_name.get(name, []) if name else []
             if len(candidates) != 1:
                 continue
 
