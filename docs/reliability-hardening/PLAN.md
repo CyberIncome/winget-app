@@ -86,10 +86,13 @@ Make Winget Universal Dashboard resilient to intermittent startup, scan, update,
 **Complete.** Atomic config persistence, keyring migration, bounded redirect-aware HTTPS, rotating/session/fault logging, cache cleanup and dependency separation are in place.
 
 ### Phase 8 — Reproducible Windows packaging/acceptance
-**Implementation complete; native acceptance pending.** `scripts/build_windows.py` builds GUI/CLI one-file artifacts. `scripts/verify_windows.py` runs compile/lint/tests/runtime smoke and can add `--live-winget` and `--build` release gates.
+**Complete / PASS.** `scripts/build_windows.py` built both one-file artifacts successfully. The packaged CLI and packaged GUI smoke tests passed. Native Windows verification passed after one verification-harness repair loop.
 
 ### Phase 9 — Final adversarial verification and documentation
-**Complete on the audit host.** Current blobs were re-read after apparently reaching completion. The final loop found and repaired additional defects, including stale Qt model indexes, stdout-read invalidation, shutdown exception escape paths, broader selector controls, bounded CLI capture, a console-history regression introduced during hardening, and an over-strict Unicode parser invariant. Current pure-Python final gate is green; native Windows gates remain explicit.
+**Complete / PASS.** The final loops found and repaired additional defects, including stale Qt model indexes, stdout-read invalidation, shutdown exception escape paths, broader selector controls, bounded CLI capture, a console-history regression introduced during hardening, an over-strict Unicode parser invariant, and a direct smoke-script import-path defect in the verification harness.
+
+### Phase 10 — Native Windows acceptance
+**Complete / PASS.** Final accepted Windows run: compile PASS, Ruff PASS, native lifecycle 19/19 PASS, full pytest/pytest-qt 181/181 PASS, source CLI PASS, canonical runtime GUI smoke PASS, Winget v1.29.290 PASS, real read-only Winget scan PASS. The immediately preceding build-enabled run also passed GUI/CLI PyInstaller builds and both packaged smokes.
 
 ## Important deviations/findings added during execution
 
@@ -104,30 +107,37 @@ Make Winget Universal Dashboard resilient to intermittent startup, scan, update,
 - CLI and GUI scan contracts diverged.
 - Cross-origin redirect handling initially stripped secret headers but still forwarded explicit `auth=`/`cookies=` kwargs.
 - An alternate legacy GUI execution path could bypass the hardened controller.
-- A hardening validator initially accepted newline-adjacent selector/source input; the verification gate caught it and the gate was restarted.
+- A hardening validator initially accepted newline-adjacent selector/source input; verification caught it and the gate was restarted.
 - QProcess callback and shutdown methods still had exception escapes after the first controller hardening; `RuntimeMainWindow` now owns the final boundary.
 - Production model source-aware checkbox identity initially disagreed with inherited selection helper methods; the helper contract was unified.
 - CLI `capture_output=True` was an unbounded memory path; capture is now temp-file-backed and bounded.
 - A hardening change accidentally increased console history from 2,000 to 10,000 blocks; canonical runtime restores the original 2,000-block cap while retaining new live-line/output caps.
-- A Unicode boundary invariant added during the final parser pass initially rejected the legitimate German truncated-ID fixture. Fresh exact-blob testing caught the regression; the invariant was corrected and the parser gate reran 15/15.
-- The final HTTP review identified that current HTTPS safety is not DNS/IP-level SSRF isolation. This is recorded as a separate residual rather than addressed with a fragile hostname string blacklist.
+- A Unicode boundary invariant initially rejected a legitimate German truncated-ID fixture. Fresh exact-blob testing caught it; the parser gate reran 15/15 after correction.
+- The first Windows aggregate run found a test-harness-only import-path defect in `scripts/smoke_gui.py`; all application tests/builds/package smokes had passed. The harness was repaired, guarded, and the full Windows gate reran successfully with 181 tests.
+- Final HTTP review identified that current HTTPS safety is not DNS/IP-level SSRF isolation. This remains a non-blocking future hardening opportunity rather than a fragile hostname blacklist.
 
 ## Final evidence / release rule
 
-The final audit-host evidence is recorded in `VERIFICATION.md`. The current exact parser/executor/decoder/command-runner surface earned **65 fresh tests passed** in the final loop, in addition to unchanged earlier config/HTTP evidence and repository-tree/static review.
+Audit-host exact-current-blob evidence: **65 tests passed** in the final pure-Python loop.
 
-Native Windows acceptance remains mandatory because Linux cannot honestly prove PySide6/QProcess signal ordering, pywin32/COM behavior, Windows keyring, multiprocessing spawn, the real Winget executable or PyInstaller output.
+Native Windows acceptance:
 
-Release candidate command:
+- lifecycle integration: **19/19 PASS**;
+- full pytest/pytest-qt: **181/181 PASS**;
+- real read-only Winget scan: **PASS**;
+- aggregate Windows verifier: **PASS**.
 
-```powershell
-python scripts\verify_windows.py --live-winget --build
-```
+Packaged acceptance:
 
-Then complete `WINDOWS-VERIFICATION.md` manual crash-boundary checks.
+- GUI PyInstaller build: **PASS**;
+- CLI PyInstaller build: **PASS**;
+- packaged CLI smoke: **PASS**;
+- packaged GUI smoke: **PASS**.
+
+The only changes after the successful packaged build were the direct smoke-script path bootstrap, its regression test and documentation; application/build sources were unchanged.
 
 **Implementation/static/pure-Python status: COMPLETE / PASS.**
 
-**Native Windows/package acceptance: PENDING.**
+**Native Windows/package acceptance: COMPLETE / PASS.**
 
-**Merge/release: HOLD until native acceptance passes.**
+**Merge/release: READY TO MERGE.**
