@@ -1,3 +1,5 @@
+import unicodedata
+
 import pytest
 
 from src.logic.upgrade_parser import (
@@ -5,6 +7,24 @@ from src.logic.upgrade_parser import (
     parse_upgrade_table,
     parse_winget_upgrade_strict,
 )
+
+
+def _width(text):
+    total = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        total += 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+    return total
+
+
+def _row(fields, starts):
+    result = fields[0]
+    for field, target in zip(fields[1:], starts[1:]):
+        padding = target - _width(result)
+        assert padding >= 1
+        result += " " * padding + field
+    return result
 
 
 def test_parse_upgrade_table_standard():
@@ -40,6 +60,66 @@ Example App             Example.App           1.0.0        1.1.0
     assert rows[0]["Id"] == "Example.App"
     assert rows[0]["Available"] == "1.1.0"
     assert rows[0]["Source"] == ""
+
+
+def test_parse_localized_german_header_and_truncated_id():
+    output = """Name                                   ID                                      Version          Verfügbar        Quelle
+-----------------------------------------------------------------------------------------------------------------------
+Microsoft .NET Framework 4.5 SDK       Microsoft.DotNet.Framework.DeveloperPa…     < 4.6.2          4.6.2            winget
+1 Aktualisierung verfügbar.
+"""
+
+    rows = parse_upgrade_table(output)
+
+    assert rows == [
+        {
+            "Name": "Microsoft .NET Framework 4.5 SDK",
+            "Id": "Microsoft.DotNet.Framework.DeveloperPa…",
+            "Version": "< 4.6.2",
+            "Available": "4.6.2",
+            "Source": "winget",
+        }
+    ]
+
+
+def test_parse_cjk_header_and_full_width_name_by_display_columns():
+    starts = [0, 32, 64, 80, 96]
+    header = _row(
+        ["名前", "ID", "バージョン", "利用可能", "ソース"],
+        starts,
+    )
+    data = _row(
+        ["日本語 アプリ", "Example.Cjk.App", "1.0.0", "1.1.0", "winget"],
+        starts,
+    )
+    output = f"{header}\n{'-' * 110}\n{data}\n"
+
+    rows = parse_upgrade_table(output)
+
+    assert rows[0] == {
+        "Name": "日本語 アプリ",
+        "Id": "Example.Cjk.App",
+        "Version": "1.0.0",
+        "Available": "1.1.0",
+        "Source": "winget",
+    }
+
+
+def test_parse_when_available_field_leaves_only_one_space_before_source():
+    starts = [0, 24, 48, 60, 64]
+    header = _row(["Name", "Id", "Version", "Available", "Source"], starts)
+    # "1.1" occupies three of the four display cells in the Available column,
+    # leaving exactly one separating space before Source.
+    data = _row(
+        ["Example App", "Example.App", "1.0", "1.1", "Private Feed"],
+        starts,
+    )
+    output = f"{header}\n{'-' * 90}\n{data}\n"
+
+    rows = parse_upgrade_table(output)
+
+    assert rows[0]["Available"] == "1.1"
+    assert rows[0]["Source"] == "Private Feed"
 
 
 def test_no_updates_is_empty():
