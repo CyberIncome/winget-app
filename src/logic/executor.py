@@ -18,6 +18,7 @@ def _is_safe_app_id(value):
     """Return whether value can represent a complete exact package ID."""
     return bool(
         value
+        and not value.startswith("-")
         and not value.endswith(".")
         and not _has_control_character(value)
         and _VALID_APP_ID_RE.fullmatch(value)
