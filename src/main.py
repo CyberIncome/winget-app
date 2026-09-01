@@ -148,6 +148,7 @@ def main():
         time.perf_counter() - _BOOT_STARTED_AT,
     )
 
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
     from src.ui.runtime_window import RuntimeMainWindow
 
@@ -170,6 +171,13 @@ def main():
         # GUI logging handler alive for later tests in the same process.
         window.close()
         return 0
+
+    if os.getenv("WUD_PACKAGED_SMOKE") == "1":
+        # Private release-verification mode: prove a packaged executable can
+        # construct and cleanly tear down the canonical runtime window without
+        # waiting long enough for its normal 500 ms startup scan to begin.
+        QTimer.singleShot(200, window.close)
+        QTimer.singleShot(350, app.quit)
 
     exit_code = app.exec()
     logger.info(
