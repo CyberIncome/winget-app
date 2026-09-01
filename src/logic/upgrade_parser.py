@@ -10,6 +10,7 @@ silently reported as zero available updates.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Iterable
 
 
@@ -27,6 +28,7 @@ _VERSIONISH_RE = re.compile(
     r"^(?:[<>~=]{1,2}\s*)?(?:v?\d+(?:\.\d+)*|unknown|\?\?\?)$",
     re.IGNORECASE,
 )
+_HEADER_FIELD_RE = re.compile(r"\S(?:.*?\S)?(?=\s{2,}|$)")
 
 
 def _clean_lines(output: str) -> list[str]:
@@ -38,25 +40,56 @@ def _clean_lines(output: str) -> list[str]:
     return lines
 
 
+def _char_display_width(char: str) -> int:
+    if char == "\t":
+        return 4
+    if unicodedata.combining(char):
+        return 0
+    if unicodedata.east_asian_width(char) in {"W", "F"}:
+        return 2
+    return 1
+
+
+def _display_width(text: str) -> int:
+    return sum(_char_display_width(char) for char in text)
+
+
+def _index_at_display_column(text: str, target: int) -> int:
+    """Return the string index whose terminal display column reaches target."""
+    if target <= 0:
+        return 0
+    column = 0
+    for index, char in enumerate(text):
+        if column >= target:
+            return index
+        column += _char_display_width(char)
+        if column > target:
+            # A table formatter should never place a boundary inside a wide
+            # glyph. Treat it as malformed rather than splitting the glyph.
+            return -1
+    return len(text) if column == target else -1
+
+
 def _is_separator(line: str) -> bool:
     compact = line.replace(" ", "")
     return len(compact) >= 10 and bool(re.fullmatch(r"-+", compact))
 
 
-def _header_has_source(header: str) -> bool:
-    """Infer the stable 4/5-column table shape without reading localized labels."""
-    fields = [
-        field.strip()
-        for field in re.split(r"\s{2,}", header.strip())
-        if field.strip()
+def _header_layout(header: str) -> tuple[list[int], bool]:
+    """Return localized column starts as terminal display columns."""
+    matches = list(_HEADER_FIELD_RE.finditer(header.strip()))
+    if len(matches) not in {4, 5}:
+        raise WingetParseError(
+            "Winget upgrade table header did not expose a safe 4/5-column layout"
+        )
+
+    starts = [
+        _display_width(header[: match.start()])
+        for match in matches
     ]
-    if len(fields) == 4:
-        return False
-    if len(fields) == 5:
-        return True
-    raise WingetParseError(
-        "Winget upgrade table header did not expose a safe 4/5-column layout"
-    )
+    if starts != sorted(starts) or len(set(starts)) != len(starts):
+        raise WingetParseError("Winget upgrade table columns are out of order")
+    return starts, len(matches) == 5
 
 
 def _plausible_package_id(value: str) -> bool:
@@ -69,42 +102,33 @@ def _plausible_package_id(value: str) -> bool:
     return any(char.isalnum() for char in value)
 
 
-def _parse_layout_row(line: str, has_source: bool) -> dict[str, str] | None:
-    """Parse one row from the right, avoiding Unicode display-width offsets.
-
-    WinGet aligns columns by terminal display width, which does not equal
-    Python string length for CJK/full-width names. We therefore split on the
-    table's padding runs from the right. The final prefix contains ``Name`` and
-    ``Id``; the ID is the last whitespace-delimited token in that prefix.
-    """
-    parts = [part.strip() for part in re.split(r"\s{2,}", line.strip())]
-    minimum_parts = 4 if has_source else 3
-    if len(parts) < minimum_parts:
+def _slice_display_row(
+    line: str,
+    starts: list[int],
+    has_source: bool,
+) -> dict[str, str] | None:
+    """Slice a row by terminal display columns, not Python codepoint offsets."""
+    indexes = [_index_at_display_column(line, start) for start in starts]
+    if any(index < 0 for index in indexes):
         return None
 
-    if has_source:
-        source = parts[-1]
-        available = parts[-2]
-        version = parts[-3]
-        prefix_parts = parts[:-3]
-    else:
-        source = ""
-        available = parts[-1]
-        version = parts[-2]
-        prefix_parts = parts[:-2]
-
-    prefix = "  ".join(prefix_parts).strip()
-    try:
-        name, package_id = prefix.rsplit(None, 1)
-    except ValueError:
+    # A row must actually reach the Available column. Source, when present in
+    # the header, must also have at least one character at its column start.
+    if _display_width(line) <= starts[3]:
+        return None
+    if has_source and _display_width(line) <= starts[4]:
         return None
 
-    name = name.strip()
-    package_id = package_id.strip()
-    version = version.strip()
-    available = available.strip()
-    source = source.strip()
+    boundaries = [*indexes, len(line)]
+    fields = [
+        line[boundaries[index] : boundaries[index + 1]].strip()
+        for index in range(len(starts))
+    ]
+    if len(fields) not in {4, 5}:
+        return None
 
+    name, package_id, version, available = fields[:4]
+    source = fields[4] if has_source else ""
     if not name or not _plausible_package_id(package_id):
         return None
     if not version or not available:
@@ -133,10 +157,10 @@ def _looks_like_localized_summary(line: str) -> bool:
 def parse_upgrade_table(output: str) -> list[dict[str, str]]:
     """Parse validated rows from localized ``winget upgrade`` output.
 
-    WinGet's column labels are localized, but the table remains an ordered
-    four-column layout (Name, Id, Version, Available) with an optional fifth
-    Source column. Parsing is structural and right-anchored so full-width
-    characters in application names cannot shift Python slicing offsets.
+    WinGet's labels are localized, but the table remains an ordered four-column
+    layout (Name, Id, Version, Available) with an optional fifth Source column.
+    Column positions are measured in terminal display cells so CJK/full-width
+    text cannot shift Python slicing offsets.
 
     Any malformed package row fails the whole parse so partial/truncated output
     cannot silently hide updates. Empty/whitespace-only output is also an error:
@@ -154,16 +178,17 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
 
     lines = _clean_lines(output)
     separator_index = None
-    has_source = None
+    starts = None
+    has_source = False
 
     for index in range(1, len(lines)):
         if not _is_separator(lines[index]):
             continue
         separator_index = index
-        has_source = _header_has_source(lines[index - 1])
+        starts, has_source = _header_layout(lines[index - 1])
         break
 
-    if separator_index is None or has_source is None:
+    if separator_index is None or starts is None:
         raise WingetParseError(
             "Winget output did not contain a recognizable upgrade table "
             "or no-update marker"
@@ -173,7 +198,7 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
     malformed_data_lines = 0
 
     for line in lines[separator_index + 1 :]:
-        row = _parse_layout_row(line, has_source)
+        row = _slice_display_row(line, starts, has_source)
         if row is not None:
             rows.append(row)
             continue
