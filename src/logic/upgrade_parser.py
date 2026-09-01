@@ -178,17 +178,22 @@ def enrich_upgrade_rows(
     version for display, but must never discard a Winget row based on our much
     simpler numeric version parser.
     """
-    from src.logic.parser import find_version_in_registry
-
     materialized = [dict(row) for row in rows]
-    if reg_data is None:
-        from src.logic.parser import get_registry_data
+    unknown_rows = [
+        row
+        for row in materialized
+        if row["Version"].strip().lower() == "unknown"
+    ]
 
-        reg_data = get_registry_data()
+    if unknown_rows:
+        from src.logic.parser import find_version_in_registry
 
-    for row in materialized:
-        reported_version = row["Version"]
-        if reported_version.strip().lower() == "unknown":
+        if reg_data is None:
+            from src.logic.parser import get_registry_data
+
+            reg_data = get_registry_data()
+
+        for row in unknown_rows:
             detected = find_version_in_registry(
                 row["Name"], row["Id"], reg_data, allow_fuzzy=False
             )
