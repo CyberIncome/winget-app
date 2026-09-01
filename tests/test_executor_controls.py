@@ -14,6 +14,9 @@ from src.logic.executor import (
         "Google.Chrome\n",
         "Google.Chrome\r",
         "Google.Chrome\x00",
+        "Google.Chrome\t",
+        "Google.Chrome\x1b",
+        "Google.Chrome\x7f",
         "Google.Chrome\nOther.App",
     ],
 )
@@ -29,9 +32,15 @@ def test_app_id_rejects_control_characters(value):
         (validate_package_name, "App\n"),
         (validate_package_name, "\nApp"),
         (validate_package_name, "App\x00Name"),
+        (validate_package_name, "App\tName"),
+        (validate_package_name, "App\x1bName"),
+        (validate_package_name, "App\x7fName"),
         (validate_source_name, "winget\n"),
         (validate_source_name, "\nwinget"),
         (validate_source_name, "winget\x00evil"),
+        (validate_source_name, "winget\tother"),
+        (validate_source_name, "winget\x1bother"),
+        (validate_source_name, "winget\x7fother"),
     ],
 )
 def test_name_and_source_reject_control_characters(validator, value):
