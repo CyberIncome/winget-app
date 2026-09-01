@@ -90,7 +90,9 @@ class ProductionMainWindow(HardenedMainWindow):
 
     def __init__(self):
         self._failed_start_pending = False
+        self._terminal_line_limit = 16 * 1024
         super().__init__()
+        self.console.setMaximumBlockCount(10_000)
         self.process.started.connect(self._handle_process_started)
         self.update_all_btn.setToolTip(
             "Update every package proven upgradeable by the current Winget scan"
@@ -164,6 +166,31 @@ class ProductionMainWindow(HardenedMainWindow):
             self.append_log(
                 f"\n[!] Failure recovery for {name} also failed: {exc}"
             )
+
+    # ── Process output bounds ───────────────────────
+
+    def _handle_process_output(self, stream_name, raw):
+        """Render process output while bounding a never-terminated live line."""
+        if raw:
+            last_break = max(raw.rfind("\n"), raw.rfind("\r"))
+            if last_break < 0:
+                combined = self._terminal_line_buffer + raw
+                if len(combined) > self._terminal_line_limit:
+                    self._terminal_line_buffer = ""
+                    raw = combined[-self._terminal_line_limit :]
+            else:
+                tail = raw[last_break + 1 :]
+                if len(tail) > self._terminal_line_limit:
+                    raw = (
+                        raw[: last_break + 1]
+                        + tail[-self._terminal_line_limit :]
+                    )
+
+        super()._handle_process_output(stream_name, raw)
+        if len(self._terminal_line_buffer) > self._terminal_line_limit:
+            self._terminal_line_buffer = self._terminal_line_buffer[
+                -self._terminal_line_limit :
+            ]
 
     # ── QProcess generation safety ──────────────────
 
