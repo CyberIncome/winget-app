@@ -18,6 +18,7 @@ from src.logic.executor import (
     is_valid_app_id,
     validate_source_name,
 )
+from src.logic.output_decode import decode_process_bytes
 from src.ui.hardened_window import HardenedMainWindow
 from src.ui.main_window import UpdateModel
 
@@ -91,6 +92,8 @@ class ProductionMainWindow(HardenedMainWindow):
     def __init__(self):
         self._failed_start_pending = False
         self._terminal_line_limit = 16 * 1024
+        self._process_stdout_bytes = bytearray()
+        self._process_stdout_overflow = False
         super().__init__()
         self.console.setMaximumBlockCount(10_000)
         self.process.started.connect(self._handle_process_started)
@@ -115,6 +118,8 @@ class ProductionMainWindow(HardenedMainWindow):
     def refresh_updates(self):
         if self._foreground_operation_blocked("refresh updates"):
             return
+        self._process_stdout_bytes.clear()
+        self._process_stdout_overflow = False
         super().refresh_updates()
 
     def refresh_inventory(self):
@@ -199,7 +204,56 @@ class ProductionMainWindow(HardenedMainWindow):
                 f"\n[!] Failure recovery for {name} also failed: {exc}"
             )
 
-    # ── Process output bounds ───────────────────────
+    # ── Process output safety ───────────────────────
+
+    def _capture_refresh_stdout(self, raw_bytes):
+        """Retain a bounded authoritative byte stream for Winget parsing."""
+        if self.current_operation != "refresh" or not raw_bytes:
+            return
+        if self._process_stdout_overflow:
+            return
+        remaining = self._max_output_bytes - len(self._process_stdout_bytes)
+        if len(raw_bytes) > remaining:
+            if remaining > 0:
+                self._process_stdout_bytes.extend(raw_bytes[:remaining])
+            self._process_stdout_overflow = True
+            self.logger.error(
+                "Winget refresh stdout exceeded %d byte safety limit.",
+                self._max_output_bytes,
+            )
+            return
+        self._process_stdout_bytes.extend(raw_bytes)
+
+    def handle_stdout(self):
+        """Decode live output while preserving raw refresh bytes for parsing."""
+        try:
+            raw_bytes = bytes(self.process.readAllStandardOutput().data())
+            if not raw_bytes:
+                return
+            self._process_last_output = time.monotonic()
+            self._capture_refresh_stdout(raw_bytes)
+            decoded = decode_process_bytes(raw_bytes)
+            if self.current_operation != "refresh":
+                self.full_output += decoded
+                if len(self.full_output) > self._max_output_bytes:
+                    self.full_output = self.full_output[-self._max_output_bytes :]
+            self._handle_process_output("stdout", decoded)
+        except Exception as exc:
+            self.logger.exception("Error handling process stdout: %s", exc)
+
+    def handle_stderr(self):
+        """Decode stderr through the same locale-aware process decoder."""
+        try:
+            raw_bytes = bytes(self.process.readAllStandardError().data())
+            if not raw_bytes:
+                return
+            self._process_last_output = time.monotonic()
+            decoded = decode_process_bytes(raw_bytes)
+            self._handle_process_output("stderr", decoded)
+            if decoded.strip():
+                self.logger.error("CLI Error: %s", decoded.strip())
+        except Exception as exc:
+            self.logger.exception("Error handling process stderr: %s", exc)
 
     def _handle_process_output(self, stream_name, raw):
         """Render process output while bounding a never-terminated live line."""
@@ -241,11 +295,58 @@ class ProductionMainWindow(HardenedMainWindow):
             ):
                 self.process_queue.clear()
                 self.activity_progress.setText("")
-        super().handle_process_error(error)
+        try:
+            super().handle_process_error(error)
+        except Exception as exc:
+            self._recover_process_callback_failure(
+                self.current_operation,
+                "errorOccurred",
+                exc,
+            )
 
     def _handle_process_started(self):
         self._failed_start_pending = False
         self._process_start_failed = False
+
+    def _recover_process_callback_failure(self, operation, signal_name, exc):
+        """Fail closed if a Qt process callback itself raises unexpectedly."""
+        self.logger.exception(
+            "QProcess %s handling failed operation=%s: %s",
+            signal_name,
+            operation,
+            exc,
+        )
+        try:
+            self.process_timeout_timer.stop()
+        except Exception:
+            pass
+
+        if operation == "update" and hasattr(self, "process_queue"):
+            self.process_queue.clear()
+        self.current_operation = None
+        self.activity_progress.setText("")
+
+        if operation in {"refresh", "update"}:
+            try:
+                self.set_ui_busy(
+                    "Process handling failed.",
+                    False,
+                    operation,
+                )
+            except Exception as recovery_exc:
+                self.logger.exception(
+                    "Could not restore UI after process callback failure: %s",
+                    recovery_exc,
+                )
+                self._active_tasks.discard(operation)
+        if operation == "refresh":
+            try:
+                self._advance_startup_after_refresh()
+            except Exception as recovery_exc:
+                self.logger.exception(
+                    "Could not advance startup after refresh callback failure: %s",
+                    recovery_exc,
+                )
 
     def process_finished(self, code, status):
         if self._failed_start_pending:
@@ -255,7 +356,31 @@ class ProductionMainWindow(HardenedMainWindow):
             self._failed_start_pending = False
             self._process_start_failed = False
             return
-        super().process_finished(code, status)
+
+        operation = self.current_operation
+        try:
+            # Drain any bytes Qt has not yet delivered through readyRead before
+            # constructing the authoritative refresh text.
+            self.handle_stdout()
+            self.handle_stderr()
+            if operation == "refresh":
+                if self._process_stdout_overflow:
+                    self.full_output = ""
+                    self.append_log(
+                        "\n[!] Winget scan output exceeded the safety limit; "
+                        "the scan will be treated as invalid."
+                    )
+                else:
+                    self.full_output = decode_process_bytes(
+                        self._process_stdout_bytes
+                    )
+            super().process_finished(code, status)
+        except Exception as exc:
+            self._recover_process_callback_failure(
+                operation,
+                "finished",
+                exc,
+            )
 
     # ── Winget update-model contract ────────────────
 
