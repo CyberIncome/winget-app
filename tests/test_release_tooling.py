@@ -15,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import release_common  # noqa: E402
+import smoke_installer  # noqa: E402
 from release_common import is_prerelease, numeric_version_text, parse_version  # noqa: E402
 
 
@@ -153,11 +154,37 @@ def test_publisher_verifies_commit_hashes_remote_and_defaults_draft():
 
 def test_installer_smoke_refuses_existing_install_and_uninstalls():
     source = (SCRIPTS / "smoke_installer.py").read_text(encoding="utf-8")
-    assert "TemporaryDirectory" in source
+    assert "mkdtemp" in source
     assert "_require_no_existing_install()" in source
+    assert "_wait_for_uninstall_complete" in source
+    assert "_cleanup_temp_tree" in source
     assert "HKEY_CURRENT_USER" in source
     assert "/CURRENTUSER" in source
     assert "/NOICONS" in source
     assert "unins*.exe" in source
     assert "WUD_PACKAGED_SMOKE" in source
     assert "BUILD_INFO.json" in source
+
+
+def test_installer_temp_cleanup_retries_transient_windows_lock(tmp_path, monkeypatch):
+    root = tmp_path / "smoke"
+    root.mkdir()
+    (root / "uninstall.log").write_text("log", encoding="utf-8")
+
+    real_rmtree = smoke_installer.shutil.rmtree
+    calls = 0
+
+    def flaky_rmtree(path):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise PermissionError(32, "file is being used by another process")
+        real_rmtree(path)
+
+    monkeypatch.setattr(smoke_installer.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(smoke_installer.time, "sleep", lambda _seconds: None)
+
+    smoke_installer._cleanup_temp_tree(root, timeout=1.0)
+
+    assert calls == 3
+    assert not root.exists()
