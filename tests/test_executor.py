@@ -1,4 +1,5 @@
 import pytest
+
 from src.logic.executor import (
     WingetExecutor,
     is_valid_app_id,
@@ -9,7 +10,11 @@ from src.logic.executor import (
 def test_generate_upgrade_command():
     executor = WingetExecutor()
     assert executor.get_check_updates_cmd() == [
-        "winget", "upgrade", "--include-unknown"
+        "winget",
+        "upgrade",
+        "--include-unknown",
+        "--accept-source-agreements",
+        "--disable-interactivity",
     ]
 
 
@@ -17,9 +22,15 @@ def test_generate_update_single_cmd():
     executor = WingetExecutor()
     cmd = executor.get_update_cmd("Google.Chrome")
     assert cmd == [
-        "winget", "upgrade", "--id", "Google.Chrome",
-        "--silent", "--accept-package-agreements",
+        "winget",
+        "upgrade",
+        "--id",
+        "Google.Chrome",
+        "--exact",
+        "--silent",
+        "--accept-package-agreements",
         "--accept-source-agreements",
+        "--disable-interactivity",
     ]
 
 
@@ -29,10 +40,15 @@ def test_generate_update_by_name_cmd():
         "Visual Studio Build Tools 2022", match_by="name"
     )
     assert cmd == [
-        "winget", "upgrade", "--name",
+        "winget",
+        "upgrade",
+        "--name",
         "Visual Studio Build Tools 2022",
-        "--silent", "--accept-package-agreements",
+        "--exact",
+        "--silent",
+        "--accept-package-agreements",
         "--accept-source-agreements",
+        "--disable-interactivity",
     ]
 
 
@@ -42,24 +58,30 @@ def test_generate_update_without_silent_cmd():
         "Perplexity.Comet", silent=False
     )
     assert cmd == [
-        "winget", "upgrade", "--id", "Perplexity.Comet",
+        "winget",
+        "upgrade",
+        "--id",
+        "Perplexity.Comet",
+        "--exact",
         "--accept-package-agreements",
         "--accept-source-agreements",
+        "--disable-interactivity",
     ]
 
 
 def test_generate_update_all_cmd():
     executor = WingetExecutor()
-    cmd = executor.get_update_all_cmd()
-    assert cmd == [
-        "winget", "upgrade", "--all",
-        "--include-unknown", "--silent",
+    assert executor.get_update_all_cmd() == [
+        "winget",
+        "upgrade",
+        "--all",
+        "--include-unknown",
+        "--silent",
         "--accept-package-agreements",
         "--accept-source-agreements",
+        "--disable-interactivity",
     ]
 
-
-# --- C1: app_id validation tests ---
 
 def test_validate_app_id_valid():
     assert validate_app_id("Google.Chrome") == "Google.Chrome"
@@ -69,7 +91,9 @@ def test_validate_app_id_valid():
 
 def test_is_valid_app_id():
     assert is_valid_app_id("Google.Chrome") is True
-    assert is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo...") is True
+    assert is_valid_app_id(
+        "Microsoft.VisualStudio.2022.BuildToo..."
+    ) is True
     assert (
         is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo\u2026")
         is False
@@ -78,11 +102,10 @@ def test_is_valid_app_id():
 
 
 def test_validate_app_id_rejects_injection():
-    """Crafted IDs with arguments must be rejected."""
     with pytest.raises(ValueError):
         validate_app_id("Foo --force")
     with pytest.raises(ValueError):
-        validate_app_id('Foo; rm -rf /')
+        validate_app_id("Foo; rm -rf /")
     with pytest.raises(ValueError):
         validate_app_id("Foo --override C:\\Windows")
 
