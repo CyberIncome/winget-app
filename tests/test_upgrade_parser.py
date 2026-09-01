@@ -107,9 +107,9 @@ def test_parse_cjk_header_and_full_width_name_by_display_columns():
 
 def test_parse_when_available_field_leaves_only_one_space_before_source():
     starts = [0, 24, 48, 60, 64]
-    header = _row(["Name", "Id", "Version", "Available", "Source"], starts)
-    # "1.1" occupies three of the four display cells in the Available column,
-    # leaving exactly one separating space before Source.
+    header = _row(["Name", "Id", "Ver", "A", "Src"], starts)
+    # "1.1" occupies three of the four display cells in this localized table's
+    # Available column, leaving exactly one separating space before Source.
     data = _row(
         ["Example App", "Example.App", "1.0", "1.1", "Private Feed"],
         starts,
