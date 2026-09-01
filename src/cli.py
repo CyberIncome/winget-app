@@ -1,117 +1,68 @@
-"""Winget Universal Dashboard — CLI interface.
+"""Command-line interface for Winget Universal Dashboard."""
 
-Exposes the same operations as the GUI for scripting,
-automation, and programmatic access.
-
-Usage:
-    python -m src.cli check
-    python -m src.cli inventory
-    python -m src.cli update Google.Chrome
-    python -m src.cli update --all
-    python -m src.cli search chrome
-    python -m src.cli detective
-    python -m src.cli status
-"""
+from __future__ import annotations
 
 import json
 import logging
 import subprocess
-import sys
 import time
 
 import click
 
-from src.logic.parser import (
-    parse_winget_upgrade,
-    parse_winget_show_version,
-    get_total_inventory,
-    get_registry_data,
-    check_remote_version,
-    is_version_newer,
-)
-from src.logic.config import ConfigManager
+from src.logic.command_runner import CommandResult, run_command
 from src.logic.executor import WingetExecutor, validate_app_id
+from src.logic.upgrade_parser import WingetParseError, parse_winget_upgrade_strict
 
-
-# ── Logging setup ───────────────────────────────────
 
 def setup_logging(verbose):
-    """Configure logging for CLI output."""
-    level = logging.DEBUG if verbose else logging.INFO
+    """Configure CLI logging."""
     logging.basicConfig(
-        level=level,
+        level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s  %(levelname)-7s  %(message)s",
         datefmt="%H:%M:%S",
     )
 
 
-# ── Helpers ─────────────────────────────────────────
+def run_winget(args, timeout=300) -> CommandResult:
+    """Run a non-interactive Winget command with structured failure state."""
+    command = ["winget", *args]
+    logging.debug("Running: %s", " ".join(command))
+    return run_command(command, timeout=timeout)
 
-def run_winget(args, timeout=300):
-    """Run a winget command and return stdout."""
-    cmd = ["winget"] + args
-    logging.debug(f"Running: {' '.join(cmd)}")
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            encoding="utf-8",
-            errors="replace",
-        )
+
+def _require_success(result: CommandResult) -> str:
+    if result.ok:
         return result.stdout
-    except subprocess.TimeoutExpired:
-        logging.error(
-            f"Command timed out after {timeout}s"
-        )
-        return ""
-    except FileNotFoundError:
-        logging.error(
-            "winget not found. Is it installed and "
-            "on your PATH?"
-        )
-        sys.exit(1)
-    except OSError as e:
-        logging.error(
-            "winget failed to start. Confirm App Installer is "
-            f"installed and the winget app execution alias works: {e}"
-        )
-        sys.exit(1)
+    raise click.ClickException(f"winget {result.failure_summary()}")
 
 
 def print_table(rows, columns, widths=None):
-    """Print a formatted ASCII table."""
+    """Print a formatted table."""
     if not rows:
         click.echo("  (no results)")
         return
 
     if widths is None:
         widths = {}
-        for col in columns:
-            max_w = len(col)
-            for row in rows:
-                val = str(row.get(col, ""))
-                max_w = max(max_w, len(val))
-            widths[col] = min(max_w + 2, 50)
+        for column in columns:
+            max_width = max(
+                [len(column)]
+                + [len(str(row.get(column, ""))) for row in rows]
+            )
+            widths[column] = min(max_width + 2, 50)
 
-    # Header
-    header = ""
-    for col in columns:
-        header += str(col).ljust(widths[col])
+    header = "".join(str(c).ljust(widths[c]) for c in columns)
     click.secho(header, fg="cyan", bold=True)
     click.echo("─" * sum(widths.values()))
 
-    # Rows
     for row in rows:
-        line = ""
-        for col in columns:
-            val = str(row.get(col, ""))
-            if len(val) > widths[col] - 2:
-                val = val[: widths[col] - 5] + "..."
-            line += val.ljust(widths[col])
-
-        # Highlight unknowns in yellow
+        parts = []
+        for column in columns:
+            value = str(row.get(column, ""))
+            if len(value) > widths[column] - 2:
+                value = value[: widths[column] - 5] + "..."
+            parts.append(value.ljust(widths[column]))
+        line = "".join(parts)
         version = str(row.get("Version", "")).lower()
         if "unknown" in version or "???" in version:
             click.secho(line, fg="yellow")
@@ -122,84 +73,68 @@ def print_table(rows, columns, widths=None):
 
 
 def output_json(data):
-    """Print JSON to stdout."""
     click.echo(json.dumps(data, indent=2, default=str))
 
 
-# ── CLI Group ───────────────────────────────────────
+def _progress(ctx, text, color="blue"):
+    if not ctx.obj.get("json"):
+        click.secho(text, fg=color)
+
 
 @click.group()
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
 @click.option(
-    "-v", "--verbose", is_flag=True,
-    help="Enable debug logging.",
-)
-@click.option(
-    "--json-output", "use_json", is_flag=True,
+    "--json-output",
+    "use_json",
+    is_flag=True,
     help="Output results as JSON.",
 )
 @click.pass_context
 def cli(ctx, verbose, use_json):
-    """Winget Universal Dashboard — CLI
-
-    Manage Windows packages from the command line.
-    All commands support --json-output for machine-
-    readable output.
-    """
+    """Manage Windows packages from the command line."""
     ctx.ensure_object(dict)
     ctx.obj["json"] = use_json
     ctx.obj["verbose"] = verbose
     setup_logging(verbose)
 
 
-# ── check ───────────────────────────────────────────
-
 @cli.command()
 @click.pass_context
 def check(ctx):
-    """Check for available updates via winget."""
-    click.secho(
-        "🔍 Checking for updates...", fg="blue",
+    """Check for available updates via Winget."""
+    _progress(ctx, "Checking for updates...")
+    from src.logic.parser import get_registry_data
+
+    output = _require_success(
+        run_winget(["upgrade", "--include-unknown"])
     )
-    reg_data = get_registry_data()
-    output = run_winget(["upgrade", "--include-unknown"])
-    results = parse_winget_upgrade(
-        output, reg_data=reg_data
-    )
+    try:
+        results = parse_winget_upgrade_strict(
+            output, reg_data=get_registry_data()
+        )
+    except WingetParseError as exc:
+        raise click.ClickException(
+            f"could not parse winget upgrade output safely: {exc}"
+        ) from exc
 
     if ctx.obj["json"]:
         output_json(results)
         return
 
     click.secho(
-        f"\n📦 {len(results)} updates available\n",
-        fg="green", bold=True,
+        f"\n{len(results)} updates available\n",
+        fg="green",
+        bold=True,
     )
-    print_table(
-        results,
-        ["Name", "Id", "Version", "Available"],
-    )
+    print_table(results, ["Name", "Id", "Version", "Available"])
 
-    # Summary
-    unknowns = sum(
-        1 for r in results
-        if r["Version"].lower() == "unknown"
-    )
-    if unknowns:
-        click.secho(
-            f"\n⚠  {unknowns} apps have unknown "
-            f"installed versions",
-            fg="yellow",
-        )
-
-
-# ── inventory ───────────────────────────────────────
 
 @cli.command()
 @click.option(
-    "--type", "app_type",
+    "--type",
+    "app_type",
     type=click.Choice(
-        ["all", "installed", "portable"],
-        case_sensitive=False,
+        ["all", "installed", "portable"], case_sensitive=False
     ),
     default="all",
     help="Filter by app type.",
@@ -207,201 +142,122 @@ def check(ctx):
 @click.pass_context
 def inventory(ctx, app_type):
     """Scan full system inventory (registry + shortcuts)."""
-    click.secho(
-        "📦 Scanning system inventory...", fg="blue",
-    )
-    start = time.time()
-    data = get_total_inventory()
-    elapsed = time.time() - start
+    _progress(ctx, "Scanning system inventory...")
+    from src.logic.parser import get_total_inventory
 
+    started = time.monotonic()
+    data = get_total_inventory()
+    elapsed = time.monotonic() - started
     if app_type != "all":
-        target = (
-            "Installed" if app_type == "installed"
-            else "Portable"
-        )
-        data = [
-            d for d in data
-            if d.get("Type", "") == target
-        ]
+        target = "Installed" if app_type == "installed" else "Portable"
+        data = [item for item in data if item.get("Type") == target]
 
     if ctx.obj["json"]:
         output_json(data)
         return
-
     click.secho(
-        f"\n📦 {len(data)} applications found "
-        f"({elapsed:.1f}s)\n",
-        fg="green", bold=True,
+        f"\n{len(data)} applications found ({elapsed:.1f}s)\n",
+        fg="green",
+        bold=True,
     )
-    print_table(
-        data,
-        ["Name", "Version", "Type", "Managed"],
-    )
+    print_table(data, ["Name", "Version", "Type", "Managed"])
 
-    # Stats
-    types = {}
-    unknowns = 0
-    for d in data:
-        t = d.get("Type", "Unknown")
-        types[t] = types.get(t, 0) + 1
-        v = str(d.get("Version", "")).lower()
-        if v in ("unknown", "???"):
-            unknowns += 1
-
-    click.echo(f"\n  Types: ", nl=False)
-    for t, c in sorted(types.items()):
-        click.echo(f"{t}={c}  ", nl=False)
-    click.echo()
-    if unknowns:
-        click.secho(
-            f"  ⚠  {unknowns} unknown versions",
-            fg="yellow",
-        )
-
-
-# ── update ──────────────────────────────────────────
 
 @cli.command()
 @click.argument("app_id", required=False)
 @click.option(
-    "--all", "update_all", is_flag=True,
-    help="Update all available packages.",
+    "--all", "update_all", is_flag=True, help="Update all available packages."
 )
 @click.pass_context
 def update(ctx, app_id, update_all):
-    """Update a specific app or all apps.
-
-    Examples:
-        update Google.Chrome
-        update --all
-    """
+    """Update a specific app or all apps."""
     executor = WingetExecutor()
-
     if update_all:
-        click.secho(
-            "⬆  Updating all packages...",
-            fg="green", bold=True,
-        )
-        cmd = executor.get_update_all_cmd()
-        _run_update_live(cmd)
+        _progress(ctx, "Updating all packages...", "green")
+        _run_update_live(executor.get_update_all_cmd())
         return
 
     if not app_id:
-        click.secho(
-            "Error: provide an app ID or use --all",
-            fg="red",
-        )
-        raise SystemExit(1)
-
+        raise click.UsageError("provide an app ID or use --all")
     try:
         validate_app_id(app_id)
-    except ValueError as e:
-        click.secho(f"Error: {e}", fg="red")
-        raise SystemExit(1)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="app_id") from exc
 
-    click.secho(
-        f"⬆  Updating {app_id}...",
-        fg="green", bold=True,
-    )
-    cmd = executor.get_update_cmd(app_id)
-    _run_update_live(cmd)
+    _progress(ctx, f"Updating {app_id}...", "green")
+    _run_update_live(executor.get_update_cmd(app_id))
 
 
-def _run_update_live(cmd):
-    """Run an update command with live output."""
+def _run_update_live(command):
+    """Run an update with live merged stdout/stderr."""
     try:
         process = subprocess.Popen(
-            cmd,
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
         )
-        for line in process.stdout:
-            click.echo(f"  {line}", nl=False)
-        process.wait()
-        if process.returncode == 0:
-            click.secho(
-                "\n✅ Update complete.", fg="green",
-            )
-        else:
-            click.secho(
-                f"\n⚠  Exited with code "
-                f"{process.returncode}",
-                fg="yellow",
-            )
-    except FileNotFoundError:
-        click.secho(
-            "Error: winget not found.", fg="red",
-        )
-        raise SystemExit(1)
-    except OSError as e:
-        click.secho(
-            "Error: winget failed to start. Confirm App "
-            "Installer is installed and the winget app execution "
-            f"alias works: {e}",
-            fg="red",
-        )
-        raise SystemExit(1)
+        if process.stdout is not None:
+            for line in process.stdout:
+                click.echo(f"  {line}", nl=False)
+        return_code = process.wait()
+    except OSError as exc:
+        raise click.ClickException(
+            f"winget failed to start: {exc}"
+        ) from exc
 
+    if return_code != 0:
+        raise click.ClickException(
+            f"winget exited with code {return_code}"
+        )
+    click.secho("\nUpdate complete.", fg="green")
 
-# ── search ──────────────────────────────────────────
 
 @cli.command()
 @click.argument("query")
 @click.pass_context
 def search(ctx, query):
     """Search installed applications by name or ID."""
-    click.secho(
-        f"🔍 Searching for '{query}'...", fg="blue",
-    )
-    data = get_total_inventory()
-    query_lower = query.lower()
-    matches = [
-        d for d in data
-        if (
-            query_lower in d.get("Name", "").lower()
-            or query_lower in d.get("Id", "").lower()
-        )
-    ]
+    _progress(ctx, f"Searching for {query!r}...")
+    from src.logic.parser import get_total_inventory
 
+    query_lower = query.lower()
+    data = get_total_inventory()
+    matches = [
+        item
+        for item in data
+        if query_lower in item.get("Name", "").lower()
+        or query_lower in item.get("Id", "").lower()
+    ]
     if ctx.obj["json"]:
         output_json(matches)
         return
-
     click.secho(
-        f"\n🔎 {len(matches)} matches for '{query}'\n",
-        fg="green", bold=True,
+        f"\n{len(matches)} matches for {query!r}\n",
+        fg="green",
+        bold=True,
     )
     print_table(
-        matches,
-        ["Name", "Id", "Version", "Type", "Managed"],
+        matches, ["Name", "Id", "Version", "Type", "Managed"]
     )
 
-
-# ── detective ───────────────────────────────────────
 
 @cli.command()
-@click.option(
-    "--limit", default=0,
-    help="Max apps to check (0=all).",
-)
+@click.option("--limit", default=0, help="Max apps to check (0=all).")
 @click.pass_context
 def detective(ctx, limit):
-    """Check installed apps for remote version updates.
+    """Check installed apps for remote-version updates."""
+    _progress(ctx, "Running version detective...")
+    from src.logic.config import ConfigManager
+    from src.logic.parser import get_total_inventory
+    from src.logic.remote_versions import check_remote_version
 
-    Scans HelpLink/URLInfoAbout URLs and GitHub repos
-    to find newer versions of locally installed software.
-    """
-    click.secho(
-        "🔍 Running version detective...", fg="blue",
-    )
     data = get_total_inventory()
+    config = ConfigManager()
     results = []
     checked = 0
-
-    config = ConfigManager()
     for item in data:
         url = item.get("URL")
         if not url:
@@ -416,161 +272,95 @@ def detective(ctx, limit):
             or "release" in url.lower()
             or url in config.url_fallbacks.values()
         ):
-
             continue
 
         checked += 1
         if limit and checked > limit:
             break
-
-        click.echo(
-            f"  Checking {item['Name']}... ", nl=False
-        )
-        remote_v = check_remote_version(
-            url, installed_version=item["Version"]
-        )
-        if remote_v:
-            click.secho(
-                f"UPDATE: {item['Version']} → {remote_v}",
-                fg="green",
+        if not ctx.obj["json"]:
+            click.echo(f"  Checking {item['Name']}... ", nl=False)
+        remote = check_remote_version(url, item.get("Version"))
+        if remote:
+            results.append(
+                {
+                    "Name": item["Name"],
+                    "Id": item.get("Id", ""),
+                    "Installed": item["Version"],
+                    "Available": remote,
+                    "URL": url,
+                }
             )
-            results.append({
-                "Name": item["Name"],
-                "Id": item.get("Id", ""),
-                "Installed": item["Version"],
-                "Available": remote_v,
-                "URL": url,
-            })
-        else:
+            if not ctx.obj["json"]:
+                click.secho(
+                    f"UPDATE: {item['Version']} -> {remote}", fg="green"
+                )
+        elif not ctx.obj["json"]:
             click.secho("up to date", fg="bright_black")
 
     if ctx.obj["json"]:
         output_json(results)
         return
-
     if results:
         click.secho(
-            f"\n🔄 {len(results)} updates found "
-            f"(checked {checked} apps)\n",
-            fg="green", bold=True,
+            f"\n{len(results)} updates found (checked {checked} apps)\n",
+            fg="green",
+            bold=True,
         )
-        print_table(
-            results,
-            ["Name", "Installed", "Available"],
-        )
+        print_table(results, ["Name", "Installed", "Available"])
     else:
         click.secho(
-            f"\n✅ All {checked} checked apps are "
-            f"up to date.",
-            fg="green",
+            f"\nAll {checked} checked apps are up to date.", fg="green"
         )
 
-
-# ── status ──────────────────────────────────────────
 
 @cli.command()
 @click.pass_context
 def status(ctx):
     """Show system summary: counts, versions, health."""
-    click.secho(
-        "📊 Gathering system status...", fg="blue",
-    )
+    _progress(ctx, "Gathering system status...")
+    from src.logic.parser import get_total_inventory
 
-    # Inventory
     data = get_total_inventory()
-    total = len(data)
-    installed = sum(
-        1 for d in data if d.get("Type") == "Installed"
+    output = _require_success(
+        run_winget(["upgrade", "--include-unknown"])
     )
-    portable = sum(
-        1 for d in data if d.get("Type") == "Portable"
-    )
-    unknown_ver = sum(
-        1 for d in data
-        if str(d.get("Version", "")).lower()
-        in ("unknown", "???")
-    )
-
-    # Updates
-    output = run_winget(["upgrade", "--include-unknown"])
-    updates = parse_winget_upgrade(output)
+    try:
+        updates = parse_winget_upgrade_strict(output)
+    except WingetParseError as exc:
+        raise click.ClickException(
+            f"could not parse winget upgrade output safely: {exc}"
+        ) from exc
 
     summary = {
-        "total_apps": total,
-        "installed": installed,
-        "portable": portable,
-        "unknown_versions": unknown_ver,
-        "updates_available": len(updates),
-        "timestamp": time.strftime(
-            "%Y-%m-%d %H:%M:%S"
+        "total_apps": len(data),
+        "installed": sum(
+            1 for item in data if item.get("Type") == "Installed"
         ),
+        "portable": sum(
+            1 for item in data if item.get("Type") == "Portable"
+        ),
+        "unknown_versions": sum(
+            1
+            for item in data
+            if str(item.get("Version", "")).lower()
+            in {"unknown", "???"}
+        ),
+        "updates_available": len(updates),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-
     if ctx.obj["json"]:
         output_json(summary)
         return
 
     click.echo()
-    click.secho(
-        "  ╔══════════════════════════════════╗",
-        fg="cyan",
-    )
-    click.secho(
-        "  ║   Winget Universal Dashboard     ║",
-        fg="cyan",
-    )
-    click.secho(
-        "  ╚══════════════════════════════════╝",
-        fg="cyan",
-    )
-    click.echo()
-    click.echo(
-        f"  📦 Total Applications:  "
-        f"{click.style(str(total), bold=True)}"
-    )
-    click.echo(
-        f"     ├─ Installed:        {installed}"
-    )
-    click.echo(
-        f"     └─ Portable:         {portable}"
-    )
-    click.echo()
+    click.secho("Winget Universal Dashboard", fg="cyan", bold=True)
+    click.echo(f"  Total Applications: {summary['total_apps']}")
+    click.echo(f"  Installed: {summary['installed']}")
+    click.echo(f"  Portable: {summary['portable']}")
+    click.echo(f"  Updates Available: {summary['updates_available']}")
+    click.echo(f"  Unknown Versions: {summary['unknown_versions']}")
+    click.echo(f"  Time: {summary['timestamp']}")
 
-    update_color = "green" if not updates else "yellow"
-    click.secho(
-        f"  🔄 Updates Available:   {len(updates)}",
-        fg=update_color, bold=True,
-    )
-
-    if unknown_ver:
-        click.secho(
-            f"  ⚠  Unknown Versions:   {unknown_ver}",
-            fg="yellow",
-        )
-    else:
-        click.secho(
-            "  ✅ All versions known", fg="green",
-        )
-
-    click.echo(
-        f"\n  🕐 {summary['timestamp']}"
-    )
-
-    if updates:
-        click.echo()
-        click.secho("  Pending updates:", bold=True)
-        for u in updates[:10]:
-            click.echo(
-                f"    • {u['Name']}  "
-                f"{u['Version']} → {u['Available']}"
-            )
-        if len(updates) > 10:
-            click.echo(
-                f"    ... and {len(updates) - 10} more"
-            )
-
-
-# ── Entry point ─────────────────────────────────────
 
 def main():
     cli(obj={})
