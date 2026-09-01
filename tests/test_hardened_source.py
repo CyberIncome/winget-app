@@ -51,11 +51,11 @@ def test_main_window_direct_execution_routes_to_canonical_main():
     assert "window = MainWindow()" not in source
 
 
-def test_failed_start_guard_clears_only_after_a_process_starts():
+def test_failed_start_guard_is_generation_based_not_timer_based():
     source = (ROOT / "src" / "ui" / "production_window.py").read_text(
         encoding="utf-8"
     )
     assert "self.process.started.connect" in source
     assert "self._failed_start_pending = True" in source
     assert "self._failed_start_pending = False" in source
-    assert "QTimer.singleShot" in source  # update queue scheduling remains bounded
+    assert "_clear_failed_start_guard" not in source
