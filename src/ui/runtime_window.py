@@ -14,6 +14,13 @@ from src.ui.production_window import ProductionMainWindow
 class RuntimeMainWindow(ProductionMainWindow):
     """Own final QProcess boundaries and application teardown."""
 
+    def __init__(self):
+        super().__init__()
+        # Preserve the historical finite console history. The real unbounded
+        # path was the unterminated live-line buffer, which Production bounds
+        # separately at 16 KiB.
+        self.console.setMaximumBlockCount(2_000)
+
     def _stop_timer_safely(self, timer, label: str) -> None:
         if timer is None:
             return
