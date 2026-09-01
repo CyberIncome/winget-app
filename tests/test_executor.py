@@ -112,16 +112,30 @@ def test_validate_app_id_valid():
     assert validate_app_id("App-Name_1.0") == "App-Name_1.0"
 
 
-def test_is_valid_app_id():
+def test_is_valid_app_id_rejects_display_truncation():
     assert is_valid_app_id("Google.Chrome") is True
-    assert is_valid_app_id(
-        "Microsoft.VisualStudio.2022.BuildToo..."
-    ) is True
+    assert (
+        is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo...")
+        is False
+    )
     assert (
         is_valid_app_id("Microsoft.VisualStudio.2022.BuildToo\u2026")
         is False
     )
+    assert is_valid_app_id("Vendor.Package.") is False
     assert is_valid_app_id("Visual Studio Code") is False
+
+
+@pytest.mark.parametrize(
+    "truncated",
+    [
+        "Microsoft.VisualStudio.2022.BuildToo...",
+        "Vendor.Package.",
+    ],
+)
+def test_validate_app_id_rejects_trailing_dot(truncated):
+    with pytest.raises(ValueError):
+        validate_app_id(truncated)
 
 
 def test_validate_app_id_rejects_injection():
