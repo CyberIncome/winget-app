@@ -19,8 +19,12 @@ The deterministic default gate runs:
 
 1. Python bytecode compilation for `src`, `tests`, and `scripts`.
 2. Ruff correctness checks (`E9`, `F63`, `F7`, `F82`).
-3. The complete pytest suite, including pytest-qt UI tests.
+3. The complete pytest suite, including pytest-qt production/lifecycle tests.
 4. A CLI import/command smoke test.
+5. `scripts/smoke_gui.py`, which creates, shows, and cleanly closes the real
+   `ProductionMainWindow` before startup scans begin. This exercises target-OS
+   Qt/Win32 construction and teardown without invoking Winget or modifying the
+   machine.
 
 For an additional read-only check against the machine's real App Installer /
 Winget stack:
@@ -36,6 +40,25 @@ That adds:
 
 The live scan reads installed-package/registry state but does **not** install or
 upgrade anything.
+
+## Manual crash-boundary exercise
+
+After the deterministic gate passes, the highest-value manual checks are:
+
+1. Launch `python -m src.main` and let startup complete.
+2. Refresh Updates and Inventory several times; confirm duplicate clicks do not
+   create duplicate background jobs and the UI always returns to idle.
+3. Start an Inventory scan and immediately close the window; confirm the app
+   exits without a lingering Python child process.
+4. Start a Winget update on a package you intentionally choose, then close the
+   app while the child is active; confirm shutdown is bounded and the next app
+   launch is clean.
+5. Temporarily disable/rename the Winget App Execution Alias, launch the app,
+   and confirm one FailedToStart message is shown and an update batch is
+   aborted rather than repeatedly retrying every queued package. Restore the
+   alias afterward.
+6. Review the latest `winget_gui.log` / `winget_crash.log`; a normal close must
+   contain the same session ID from `SESSION START` through `SESSION CLEAN EXIT`.
 
 ## Release evidence
 
