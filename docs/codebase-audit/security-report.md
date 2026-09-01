@@ -1,1 +1,0 @@
-Error: 'charmap' codec can't encode character '\U0001f534' in position 48: character maps to <undefined>
