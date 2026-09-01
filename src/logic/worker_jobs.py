@@ -55,7 +55,7 @@ def detective_worker(data: list[dict], url_fallbacks: dict, result_queue) -> Non
     """Run remote version detection in an isolated process."""
 
     def operation():
-        from src.logic.parser import detect_remote_versions_batch
+        from src.logic.remote_versions import detect_remote_versions_batch
 
         return detect_remote_versions_batch(data, url_fallbacks)
 
