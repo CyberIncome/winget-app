@@ -13,6 +13,7 @@ MAIN_SHIM = ROOT / "src" / "ui" / "main_window.py"
 LEGACY = ROOT / "src" / "ui" / "legacy_window.py"
 PARSER_FACADE = ROOT / "src" / "logic" / "parser.py"
 LEGACY_PARSER = ROOT / "src" / "logic" / "legacy_parser.py"
+SMOKE_GUI = ROOT / "scripts" / "smoke_gui.py"
 
 
 def test_hardened_window_has_no_raw_thread_launches():
@@ -44,6 +45,7 @@ def test_changed_python_sources_parse_as_ast():
         ROOT / "src" / "logic" / "output_decode.py",
         ROOT / "scripts" / "verify_windows.py",
         ROOT / "scripts" / "build_windows.py",
+        SMOKE_GUI,
     ]:
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -67,6 +69,18 @@ def test_main_window_direct_execution_routes_to_canonical_main():
     assert "from src.main import main as production_main" in source
     assert "raise SystemExit(main())" in source
     assert "window = MainWindow()" not in source
+
+
+def test_smoke_gui_bootstraps_repo_root_before_app_import():
+    source = SMOKE_GUI.read_text(encoding="utf-8")
+    root_bootstrap = "ROOT = Path(__file__).resolve().parents[1]"
+    path_insert = "sys.path.insert(0, str(ROOT))"
+    app_import = "from src.ui.runtime_window import RuntimeMainWindow"
+
+    assert root_bootstrap in source
+    assert path_insert in source
+    assert app_import in source
+    assert source.index(path_insert) < source.index(app_import)
 
 
 def test_failed_start_guard_is_generation_based_not_timer_based():
