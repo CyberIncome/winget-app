@@ -82,10 +82,13 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
     configuration/version. The returned row always contains a ``Source`` key;
     it is an empty string when the column is absent. Any malformed package row
     fails the whole parse so a partial/truncated table cannot silently hide
-    updates.
+    updates. An empty/whitespace-only response is also an error: only an
+    explicit WinGet no-update marker may authoritatively mean zero updates.
     """
     if not output or not output.strip():
-        return []
+        raise WingetParseError(
+            "Winget upgrade produced empty output without a no-update marker"
+        )
 
     lowered = output.lower()
     if any(marker in lowered for marker in _NO_UPDATE_MARKERS):
