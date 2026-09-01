@@ -78,36 +78,6 @@ def test_runtime_qprocess_shutdown_stops_after_successful_wait(qtbot, monkeypatc
     assert process.kill_calls == 0
 
 
-def _assert_synchronous_boundary_recovery(
-    window, monkeypatch, method_name, operation, call
-):
-    stopped = []
-    recovered = []
-
-    def explode(*_args, **_kwargs):
-        raise RuntimeError(f"{method_name} exploded")
-
-    monkeypatch.setattr(ProductionMainWindow, method_name, explode)
-    monkeypatch.setattr(
-        window, "_stop_qprocess_safely", lambda: stopped.append(True)
-    )
-    monkeypatch.setattr(
-        window,
-        "_recover_process_callback_failure",
-        lambda op, boundary, exc: recovered.append(
-            (op, boundary, str(exc))
-        ),
-    )
-
-    call()
-
-    assert stopped == [True]
-    assert recovered == [
-        (operation, method_name.replace("_updates", "-start").replace("_update", "-start"), f"{method_name} exploded")
-    ] if method_name in {"refresh_updates", "batch_update"} else recovered
-    return recovered
-
-
 def test_runtime_refresh_start_exception_is_contained(qtbot, monkeypatch):
     window = _window(qtbot, monkeypatch)
     stopped = []
