@@ -37,12 +37,14 @@ Make Winget Universal Dashboard resilient to intermittent startup, scan, update,
 - Malformed Winget table output fails explicitly instead of silently masquerading as zero available updates.
 - The parser validates column ordering/bounds and tolerates optional `Source` output.
 - Unknown/uncertain installed versions are preserved without unsafe local filtering.
+- Package/source provenance is preserved when constructing exact Winget update commands.
+- Registry inventory identifiers are never treated as Winget package identifiers.
 
 ### Configuration/security
 - Config defaults are deep-copied.
 - Config writes are atomic.
 - PAT storage is not rewritten on every keystroke.
-- HTTP helpers reject unsafe redirect targets and cap response bodies.
+- HTTP helpers reject unsafe redirect targets, cap response bodies, and do not forward explicit credentials across origins.
 
 ### Diagnostics
 - Every GUI run has a session identifier.
@@ -75,14 +77,16 @@ Add session/lifecycle logging, remove tracked caches, split requirements, and do
 ### Phase 6 — Verification and architecture cleanup
 Run all available mechanical gates, adversarially inspect integration and failure paths, fix discovered regressions, and record residual Windows-only verification requirements.
 
+Implementation/static audit status: complete. Native Windows acceptance status: pending `scripts/verify_windows.py` on the target Windows environment.
+
 ## Verification strategy
 
-Because this execution environment is Linux, has no PySide6 installed, has no external network, and GitHub Actions minutes are unavailable, this branch uses layered gates:
+Because this execution environment is Linux, has no PySide6 installed, has no outbound shell network, and GitHub Actions minutes are unavailable, this branch uses layered gates:
 
-- `python -m compileall` / AST parsing for every changed Python file.
-- Pure-Python unit tests for parser/result/job-state logic that does not require Windows or Qt.
-- Static invariants for lifecycle ownership (for example, production hardened code must not contain raw daemon-thread launches).
-- Existing pytest additions for Windows/PySide6 behavior, intended to run locally on the target Windows machine.
+- Pure-Python executable assertions for parser, command construction/execution, configuration, and HTTP safety logic.
+- AST/source invariants for lifecycle ownership and canonical entry points.
+- Pytest/pytest-qt regression coverage committed for Windows/PySide6 behavior.
+- `scripts/verify_windows.py` as the deterministic local Windows gate, including production GUI construction/clean shutdown.
 - Git diff / repository-tree inspection for hygiene and unintended scope.
 - Final goal-backward manual verification against every must-have above.
 
@@ -90,8 +94,19 @@ A native Windows GUI run remains required before merging because COM, `QProcess`
 
 ## Deviation log
 
-Record newly discovered issues here as they are found.
-
 - D1: GitHub repository initially denied branch-ref creation through the integration. Access was corrected by the user before any code change; branch invariant preserved.
 - D2: GitHub Actions cannot be used as a verification gate because the account currently has no CI minutes. Replaced with local/offline gates plus explicit Windows-local verification instructions.
-- D3: Current Microsoft WinGet documentation (July 2026) still exposes no JSON output for `winget upgrade`; parsing cannot simply be replaced with a JSON flag. Strict table parsing remains necessary.
+- D3: Current Microsoft WinGet documentation still exposes no structured JSON output for `winget upgrade`; strict validation of the human-readable table remains necessary.
+- D4: Legacy UI startup overlapped heavyweight update, inventory, detective, and API work and used unowned daemon threads. Production startup was staged and long-running work moved to owned spawned-process jobs.
+- D5: Winget process failures conflated normal non-zero exits, crashes, timeouts, and start failures; crash/timeout could enter inappropriate retry behavior. Production state handling now distinguishes these outcomes and retries without `--silent` only after a normal installer failure.
+- D6: The original parser could return an empty/partial result for malformed or truncated Winget output. A strict parser now validates headers, separators, columns, every data row, and explicit no-update output.
+- D7: Detective-only remote-version results could overwrite the authoritative `Available` value from Winget and could appear executable. Detective results are now informational unless backed by a current Winget upgrade row.
+- D8: Exact update targeting originally did not preserve Winget source provenance, allowing duplicate IDs from different sources to collapse. Source is now displayed, retained in selection identity, included in deduplication, and passed via `--source` where available.
+- D9: A `FailedToStart` during a batch could continue attempting the same unavailable Winget executable for subsequent packages. The remaining batch is now aborted and UI state is cleared.
+- D10: Debounced PAT persistence could lose a pending value if the window closed before the timer fired. Pending PAT state is flushed during production shutdown.
+- D11: CLI update scans diverged from the GUI command contract and `status` repeated registry work. CLI `check`/`status` now use the hardened noninteractive scan command and `status` reuses one registry crawl; Ctrl+C also terminates a live update child.
+- D12: An adversarial verification run caught a defect in the hardening itself: regex/end trimming could allow newline-bearing selector/source input through validation. Validation was changed to full-string/control-character checks and regression tests were added before the gate was rerun.
+- D13: Cross-origin redirect handling stripped secret headers but originally retained explicit Requests `auth=`/`cookies=` kwargs. Those credentials are now dropped whenever a manual redirect changes origin.
+- D14: Inventory `Id` values are registry uninstall keys, not Winget provenance. The final audit found that ID collisions could theoretically target the wrong Winget row; inventory-triggered updates now ignore registry IDs and require one unique exact name match against authoritative Winget rows.
+- D15: An alternate `src.ui.main_window` direct-execution path could bypass the hardened controller. The historical implementation is preserved in `legacy_window.py`; `main_window.py` is now a compatibility export shim whose executable path routes through canonical `src.main` / `ProductionMainWindow`.
+- D16: Previous generated codebase-audit artifacts had scanned virtual-environment content and contained encoding-error output. Misleading generated reports were removed and replaced with this evidence-backed audit trail.
