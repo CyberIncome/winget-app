@@ -18,10 +18,19 @@ def _width(text):
     return total
 
 
-def _row(fields, starts):
+def _width_ambiguous_wide(text):
+    total = 0
+    for char in text:
+        if unicodedata.combining(char):
+            continue
+        total += 2 if unicodedata.east_asian_width(char) in {"W", "F", "A"} else 1
+    return total
+
+
+def _row(fields, starts, width_fn=_width):
     result = fields[0]
     for field, target in zip(fields[1:], starts[1:]):
-        padding = target - _width(result)
+        padding = target - width_fn(result)
         assert padding >= 1
         result += " " * padding + field
     return result
@@ -120,6 +129,24 @@ def test_parse_when_available_field_leaves_only_one_space_before_source():
 
     assert rows[0]["Available"] == "1.1"
     assert rows[0]["Source"] == "Private Feed"
+
+
+def test_unicode_width_disagreement_fails_instead_of_shifting_package_id():
+    starts = [0, 24, 48, 60, 72]
+    header = _row(["Name", "Id", "Ver", "Avail", "Src"], starts)
+    # U+00B7 has East Asian Width=A (ambiguous). Simulate a renderer that uses
+    # width 2 while the parser conservatively treats ambiguous characters as 1.
+    # The calculated ID start would shift one codepoint into the ID without the
+    # explicit boundary-alignment check.
+    data = _row(
+        ["Ambiguous·App", "Example.App", "1.0", "1.1", "winget"],
+        starts,
+        width_fn=_width_ambiguous_wide,
+    )
+    output = f"{header}\n{'-' * 90}\n{data}\n"
+
+    with pytest.raises(WingetParseError, match="malformed data row"):
+        parse_upgrade_table(output)
 
 
 def test_no_updates_is_empty():
