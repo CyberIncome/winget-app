@@ -1,6 +1,7 @@
 import codecs
 import sys
 
+import src.logic.command_runner as command_runner
 from src.logic.command_runner import run_command
 
 
@@ -105,3 +106,32 @@ def test_command_runner_decodes_nonzero_stderr_bytes():
     assert result.returncode == 9
     assert result.stderr == text
     assert text in result.failure_summary()
+
+
+def test_command_runner_rejects_oversized_stdout(monkeypatch):
+    monkeypatch.setattr(command_runner, "MAX_CAPTURE_BYTES", 64)
+    script = "import sys; sys.stdout.write('x' * 256); sys.stdout.flush()"
+
+    result = run_command([sys.executable, "-c", script], timeout=5)
+
+    assert result.returncode == 0
+    assert result.output_overflow is True
+    assert result.ok is False
+    assert len(result.stdout) == 64
+    assert "output exceeded 64 byte safety limit" == result.failure_summary()
+
+
+def test_command_runner_rejects_oversized_stderr(monkeypatch):
+    monkeypatch.setattr(command_runner, "MAX_CAPTURE_BYTES", 64)
+    script = (
+        "import sys; sys.stderr.write('e' * 256); "
+        "sys.stderr.flush(); raise SystemExit(7)"
+    )
+
+    result = run_command([sys.executable, "-c", script], timeout=5)
+
+    assert result.returncode == 7
+    assert result.output_overflow is True
+    assert result.ok is False
+    assert len(result.stderr) == 64
+    assert "output exceeded 64 byte safety limit" == result.failure_summary()
