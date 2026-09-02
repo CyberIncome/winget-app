@@ -6,13 +6,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_main_and_smoke_route_through_product_window():
-    main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
-    smoke_source = (ROOT / "scripts" / "smoke_gui.py").read_text(encoding="utf-8")
-    assert "from src.ui.product_window import ProductMainWindow" in main_source
-    assert "window = ProductMainWindow()" in main_source
-    assert "from src.ui.product_window import ProductMainWindow" in smoke_source
-    assert "window = ProductMainWindow()" in smoke_source
+def test_product_and_experience_layers_remain_in_canonical_chain():
+    product = (ROOT / "src" / "ui" / "product_window.py").read_text(
+        encoding="utf-8"
+    )
+    workbench = (ROOT / "src" / "ui" / "workbench_window.py").read_text(
+        encoding="utf-8"
+    )
+    experience = (ROOT / "src" / "ui" / "experience_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class ProductMainWindow(ExperienceMainWindow)" in product
+    assert "class WorkbenchMainWindow(ProductMainWindow)" in workbench
+    assert "class ExperienceMainWindow(RuntimeMainWindow)" in experience
 
 
 def test_product_layer_adds_bounded_history_and_safe_automation():
