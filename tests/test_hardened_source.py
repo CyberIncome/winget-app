@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+STARTUP_OPTIMIZED = ROOT / "src" / "ui" / "startup_optimized_window.py"
 HARDENED = ROOT / "src" / "ui" / "hardened_window.py"
 PRODUCTION = ROOT / "src" / "ui" / "production_window.py"
 RUNTIME = ROOT / "src" / "ui" / "runtime_window.py"
@@ -37,6 +38,7 @@ def test_managed_job_has_bounded_terminate_and_kill_cleanup():
 
 def test_changed_python_sources_parse_as_ast():
     for path in [
+        STARTUP_OPTIMIZED,
         HARDENED,
         PRODUCTION,
         RUNTIME,
@@ -50,6 +52,7 @@ def test_changed_python_sources_parse_as_ast():
         LEGACY,
         PARSER_FACADE,
         LEGACY_PARSER,
+        ROOT / "src" / "ui" / "selection_polish.py",
         ROOT / "src" / "logic" / "worker_jobs.py",
         ROOT / "src" / "logic" / "version_workers.py",
         ROOT / "src" / "logic" / "version_provenance.py",
@@ -67,6 +70,7 @@ def test_changed_python_sources_parse_as_ast():
 
 def test_canonical_entrypoint_preserves_runtime_shutdown_boundary_in_chain():
     main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    startup_source = STARTUP_OPTIMIZED.read_text(encoding="utf-8")
     integrity_source = VERSION_INTEGRITY.read_text(encoding="utf-8")
     aware_source = VERSION_AWARE.read_text(encoding="utf-8")
     workbench_source = WORKBENCH.read_text(encoding="utf-8")
@@ -76,8 +80,9 @@ def test_canonical_entrypoint_preserves_runtime_shutdown_boundary_in_chain():
     production_source = PRODUCTION.read_text(encoding="utf-8")
     hardened_source = HARDENED.read_text(encoding="utf-8")
 
-    assert "from src.ui.version_integrity_window import VersionIntegrityMainWindow" in main_source
-    assert "window = VersionIntegrityMainWindow()" in main_source
+    assert "from src.ui.startup_optimized_window import StartupOptimizedMainWindow" in main_source
+    assert "window = StartupOptimizedMainWindow()" in main_source
+    assert "class StartupOptimizedMainWindow(VersionIntegrityMainWindow)" in startup_source
     assert "class VersionIntegrityMainWindow(VersionAwareMainWindow)" in integrity_source
     assert "class VersionAwareMainWindow(WorkbenchMainWindow)" in aware_source
     assert "class WorkbenchMainWindow(ProductMainWindow)" in workbench_source
@@ -101,7 +106,7 @@ def test_smoke_gui_bootstraps_repo_root_before_canonical_app_import():
     root_bootstrap = "ROOT = Path(__file__).resolve().parents[1]"
     path_insert = "sys.path.insert(0, str(ROOT))"
     app_import = (
-        "from src.ui.version_integrity_window import VersionIntegrityMainWindow"
+        "from src.ui.startup_optimized_window import StartupOptimizedMainWindow"
     )
 
     assert root_bootstrap in source

@@ -153,7 +153,7 @@ def main():
     from src.ui.context_polish import apply_context_polish
     from src.ui.layout_polish import apply_layout_polish
     from src.ui.selection_polish import apply_selection_polish
-    from src.ui.version_integrity_window import VersionIntegrityMainWindow
+    from src.ui.startup_optimized_window import StartupOptimizedMainWindow
 
     app = QApplication.instance()
     if not app:
@@ -166,7 +166,7 @@ def main():
         with open(qss_path, "r", encoding="utf-8") as file_handle:
             app.setStyleSheet(file_handle.read())
 
-    window = VersionIntegrityMainWindow()
+    window = StartupOptimizedMainWindow()
     apply_layout_polish(window)
     apply_context_polish(window)
     apply_selection_polish(window)
