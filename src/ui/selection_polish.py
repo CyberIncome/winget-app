@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtWidgets import QPushButton
 
 
@@ -125,6 +125,23 @@ def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
         return
 
 
+def _enforce_checkbox_column_width(table) -> None:
+    """Restore the full-cell checkbox hit target after model replacement."""
+    try:
+        header = table.horizontalHeader()
+        header.setMinimumSectionSize(_CHECKBOX_COLUMN_WIDTH)
+        if table.model() is not None and table.model().columnCount() > 0:
+            table.setColumnWidth(0, _CHECKBOX_COLUMN_WIDTH)
+    except RuntimeError:
+        # A queued width refresh may drain during Qt teardown.
+        return
+
+
+def _schedule_checkbox_column_width(table) -> None:
+    """Run after model loaders finish their own column sizing."""
+    QTimer.singleShot(0, lambda: _enforce_checkbox_column_width(table))
+
+
 def _decouple_row_selection(window, table, proxy, pane) -> None:
     """Keep row highlighting for inspection separate from action checkboxes."""
     selection_model = table.selectionModel()
@@ -143,9 +160,13 @@ def _decouple_row_selection(window, table, proxy, pane) -> None:
             )
         )
 
-    header = table.horizontalHeader()
-    header.setMinimumSectionSize(_CHECKBOX_COLUMN_WIDTH)
-    table.setColumnWidth(0, _CHECKBOX_COLUMN_WIDTH)
+    _enforce_checkbox_column_width(table)
+    # Both production model loaders replace the proxy source model and then do
+    # their own sizing, historically resetting column 0 to 40 px. Queue our
+    # final sizing for the next event-loop turn so the reliable hit target wins.
+    proxy.sourceModelChanged.connect(
+        lambda: _schedule_checkbox_column_width(table)
+    )
 
     event_filter = _CheckboxColumnFilter(window, table, proxy)
     table.viewport().installEventFilter(event_filter)
