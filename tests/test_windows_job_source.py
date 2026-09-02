@@ -16,13 +16,14 @@ def test_windows_job_uses_kill_on_close_and_assignment():
 
 def test_managed_worker_enters_containment_before_target_execution():
     source = (ROOT / "src" / "ui" / "process_jobs.py").read_text(encoding="utf-8")
+    attach = "WindowsKillOnCloseJob.attach_current_process()"
+    invoke = "target(*args, result_queue)"
     assert "def _managed_process_entry" in source
-    assert "WindowsKillOnCloseJob.attach_current_process()" in source
-    assert "target(*args, result_queue)" in source
-    assert source.index("WindowsKillOnCloseJob.attach_current_process()") < source.index(
-        "target(*args, result_queue)"
-    )
+    assert attach in source
+    assert invoke in source
+    assert source.index(attach) < source.index(invoke)
     assert "target=_managed_process_entry" in source
+    assert "_WORKER_CONTAINMENT_JOB" in source
 
 
 def test_managed_winget_commands_inherit_worker_tree_without_nested_jobs():
@@ -32,7 +33,7 @@ def test_managed_winget_commands_inherit_worker_tree_without_nested_jobs():
     worker_jobs = (ROOT / "src" / "logic" / "worker_jobs.py").read_text(
         encoding="utf-8"
     )
-    assert "ManagedProcessJob enters a kill-on-close" in version_workers
-    assert "ManagedProcessJob enters a kill-on-close" in worker_jobs
+    assert "run_command(" in version_workers
+    assert "run_command(" in worker_jobs
     assert "require_process_tree_containment=True" not in version_workers
     assert "require_process_tree_containment=True" not in worker_jobs
