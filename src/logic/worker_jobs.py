@@ -8,9 +8,11 @@ outside the Qt process and can be terminated deterministically during shutdown.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import traceback
 from typing import Any, Callable
+import uuid
 
 
 def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
@@ -148,41 +150,55 @@ def winget_export_worker(
     include_versions: bool,
     result_queue,
 ) -> None:
-    """Create and validate a WinGet package restore-list JSON export."""
+    """Create and atomically publish a validated WinGet restore-list JSON export."""
 
     def operation():
         from src.logic.command_runner import run_command
         from src.logic.executor import WingetExecutor
 
         destination = Path(output_path)
-        command = WingetExecutor().get_export_cmd(
-            destination,
-            include_versions=bool(include_versions),
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(
+            f".{destination.name}.wud-export-{os.getpid()}-{uuid.uuid4().hex}.tmp"
         )
-        result = run_command(
-            command,
-            timeout=180,
-            require_process_tree_containment=True,
-        )
-        if not result.ok:
-            raise RuntimeError(f"winget export {result.failure_summary()}")
-        if not destination.is_file():
-            raise RuntimeError("winget export exited successfully but created no file")
-        size = destination.stat().st_size
-        if size <= 0 or size > 16 * 1024 * 1024:
-            raise RuntimeError(
-                f"winget export produced an invalid file size: {size} bytes"
-            )
         try:
-            payload = json.loads(destination.read_text(encoding="utf-8-sig"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise RuntimeError("winget export did not produce valid JSON") from exc
-        if not isinstance(payload, dict):
-            raise RuntimeError("winget export JSON root was not an object")
-        return {
-            "path": str(destination),
-            "size": size,
-            "include_versions": bool(include_versions),
-        }
+            command = WingetExecutor().get_export_cmd(
+                temporary,
+                include_versions=bool(include_versions),
+            )
+            result = run_command(
+                command,
+                timeout=180,
+                require_process_tree_containment=True,
+            )
+            if not result.ok:
+                raise RuntimeError(f"winget export {result.failure_summary()}")
+            if not temporary.is_file():
+                raise RuntimeError(
+                    "winget export exited successfully but created no temporary file"
+                )
+            size = temporary.stat().st_size
+            if size <= 0 or size > 16 * 1024 * 1024:
+                raise RuntimeError(
+                    f"winget export produced an invalid file size: {size} bytes"
+                )
+            try:
+                payload = json.loads(temporary.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("winget export did not produce valid JSON") from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("winget export JSON root was not an object")
+
+            os.replace(temporary, destination)
+            return {
+                "path": str(destination),
+                "size": size,
+                "include_versions": bool(include_versions),
+            }
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     _run_worker(result_queue, operation)
