@@ -8,6 +8,8 @@ import re
 import subprocess
 import sys
 
+from src.logic.semver import is_valid_semver
+
 
 APP_NAME = "Winget Universal Dashboard"
 APP_REPOSITORY = "CyberIncome/winget-app"
@@ -18,10 +20,6 @@ APP_LATEST_RELEASE_API = (
 )
 APP_INSTALLER_ASSET = "WingetUniversalDashboard-Setup-x64.exe"
 
-_VERSION_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"
-)
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
 
 
@@ -48,7 +46,7 @@ def get_app_version() -> str:
         ).strip()
     except OSError:
         return "0.0.0+unknown"
-    return value if _VERSION_RE.fullmatch(value) else "0.0.0+unknown"
+    return value if is_valid_semver(value) else "0.0.0+unknown"
 
 
 def _source_git_commit() -> str | None:
@@ -87,10 +85,7 @@ def get_build_info() -> dict[str, object]:
         dirty = None
 
     embedded_version = payload.get("version")
-    if (
-        isinstance(embedded_version, str)
-        and _VERSION_RE.fullmatch(embedded_version)
-    ):
+    if isinstance(embedded_version, str) and is_valid_semver(embedded_version):
         version = embedded_version
 
     return {

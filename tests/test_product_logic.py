@@ -21,13 +21,26 @@ from src.logic.update_policy import (
         ("1.0.0-rc.2", "1.0.0-rc.10", -1),
         ("1.0.0-alpha", "1.0.0-beta", -1),
         ("1.0.0+build.2", "1.0.0+build.1", 0),
+        ("1.0.0+01", "1.0.0+02", 0),
     ],
 )
 def test_semver_precedence(left, right, expected):
     assert compare_semver(left, right) == expected
 
 
-@pytest.mark.parametrize("value", ["v1.0.0", "1.0", "01.0.0", "1.0.0-01", ""])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "v1.0.0",
+        "1.0",
+        "01.0.0",
+        "1.0.0-01",
+        "1.0.0-alpha..1",
+        "1.0.0+foo..bar",
+        "1.0.0+",
+        "",
+    ],
+)
 def test_semver_rejects_invalid(value):
     with pytest.raises(ValueError):
         parse_semver(value)
@@ -99,6 +112,20 @@ def test_release_check_rejects_non_https_asset():
     )
     assert result["update_available"] is True
     assert result["installer_url"] is None
+
+
+def test_release_check_rejects_malformed_tag():
+    with pytest.raises(ValueError):
+        check_latest_release(
+            "1.0.0",
+            getter=lambda *_args, **_kwargs: _Response(
+                200,
+                {
+                    "tag_name": "v1.1.0+bad..metadata",
+                    "html_url": "https://github.com/CyberIncome/winget-app/releases",
+                },
+            ),
+        )
 
 
 def test_ignored_updates_are_source_aware_and_normalized():
