@@ -150,6 +150,7 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
+    from src.ui.context_polish import apply_context_polish
     from src.ui.layout_polish import apply_layout_polish
     from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
@@ -166,6 +167,7 @@ def main():
 
     window = VersionIntegrityMainWindow()
     apply_layout_polish(window)
+    apply_context_polish(window)
     window.show()
 
     if "pytest" in sys.modules:
