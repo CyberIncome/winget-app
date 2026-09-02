@@ -14,8 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 VERSION_FILE = ROOT / "VERSION"
 
-GUI_EXE = DIST_DIR / "WingetUniversalDashboard.exe"
-CLI_EXE = DIST_DIR / "WingetUniversalDashboardCLI.exe"
+# Public GitHub Release asset names are intentionally explicit. The installer
+# renames these to clean application filenames inside Program Files/AppData.
+GUI_EXE = DIST_DIR / "WingetUniversalDashboard-Portable-x64.exe"
+CLI_EXE = DIST_DIR / "WingetUniversalDashboard-CLI-x64.exe"
 SETUP_EXE = DIST_DIR / "WingetUniversalDashboard-Setup-x64.exe"
 BUILD_INFO_FILE = DIST_DIR / "BUILD_INFO.json"
 CHECKSUMS_FILE = DIST_DIR / "SHA256SUMS.txt"

@@ -97,7 +97,13 @@ def test_checksum_manifest_detects_changed_artifact(tmp_path):
         release_common.verify_sha256_manifest((first, second), manifest)
 
 
-def test_inno_script_is_true_x64_per_user_and_stable_id():
+def test_public_release_asset_names_are_unambiguous():
+    assert release_common.SETUP_EXE.name == "WingetUniversalDashboard-Setup-x64.exe"
+    assert release_common.GUI_EXE.name == "WingetUniversalDashboard-Portable-x64.exe"
+    assert release_common.CLI_EXE.name == "WingetUniversalDashboard-CLI-x64.exe"
+
+
+def test_inno_script_is_true_x64_per_user_and_keeps_clean_installed_names():
     source = (ROOT / "installer" / "WingetUniversalDashboard.iss").read_text(
         encoding="utf-8"
     )
@@ -107,7 +113,12 @@ def test_inno_script_is_true_x64_per_user_and_stable_id():
     assert "ArchitecturesInstallIn64BitMode=x64compatible" in source
     assert "DefaultDirName={localappdata}\\Programs\\WingetUniversalDashboard" in source
     assert "PrivilegesRequired=lowest" in source
-    assert "WingetUniversalDashboardCLI.exe" in source
+    assert '#define MyAppSourceName "WingetUniversalDashboard-Portable-x64.exe"' in source
+    assert '#define MyAppExeName "WingetUniversalDashboard.exe"' in source
+    assert '#define MyCliSourceName "WingetUniversalDashboard-CLI-x64.exe"' in source
+    assert '#define MyCliExeName "WingetUniversalDashboardCLI.exe"' in source
+    assert 'DestName: "{#MyAppExeName}"' in source
+    assert 'DestName: "{#MyCliExeName}"' in source
     assert "BUILD_INFO.json" in source
     assert "OutputBaseFilename=WingetUniversalDashboard-Setup-x64" in source
     assert "VersionInfoVersion={#AppVersionNumeric}" in source
@@ -125,11 +136,17 @@ def test_release_builder_requires_clean_identity_and_emits_checksums():
     assert "verify_sha256_manifest" in source
 
 
-def test_portable_builder_records_commit_and_dirty_state():
+def test_portable_builder_records_identity_before_packaging_and_embeds_it():
     source = (SCRIPTS / "build_windows.py").read_text(encoding="utf-8")
     assert "current_git_commit()" in source
     assert "worktree_is_dirty()" in source
-    assert "write_build_identity(version, commit, dirty=dirty)" in source
+    identity_call = "write_build_identity(version, commit, dirty=dirty)"
+    assert identity_call in source
+    assert source.index(identity_call) < source.index("artifacts = [build_gui(), build_cli()]")
+    assert 'f"{VERSION_FILE}:."' in source
+    assert 'f"{BUILD_INFO_FILE}:."' in source
+    assert "name = GUI_EXE.stem" in source
+    assert "name = CLI_EXE.stem" in source
 
 
 def test_installer_builder_requires_clean_matching_artifacts_and_inno_7():
@@ -140,7 +157,7 @@ def test_installer_builder_requires_clean_matching_artifacts_and_inno_7():
     assert "require_x64_pe([SETUP_EXE])" in source
 
 
-def test_publisher_verifies_commit_hashes_remote_and_defaults_draft():
+def test_publisher_verifies_commit_hashes_remote_and_guides_downloads():
     source = (SCRIPTS / "publish_release.py").read_text(encoding="utf-8")
     assert '"--draft"' in source
     assert "require_build_identity(version, head)" in source
@@ -150,6 +167,11 @@ def test_publisher_verifies_commit_hashes_remote_and_defaults_draft():
     assert "Remote tag" in source
     assert "is_prerelease(version)" in source
     assert 'branch != "master"' in source
+    assert '"--generate-notes"' in source
+    assert '"--notes"' in source
+    assert "Most users should download `WingetUniversalDashboard-Setup-x64.exe`" in source
+    assert "WingetUniversalDashboard-Portable-x64.exe" in source
+    assert "WingetUniversalDashboard-CLI-x64.exe" in source
 
 
 def test_installer_smoke_refuses_existing_install_and_uninstalls():
@@ -164,6 +186,10 @@ def test_installer_smoke_refuses_existing_install_and_uninstalls():
     assert "unins*.exe" in source
     assert "WUD_PACKAGED_SMOKE" in source
     assert "BUILD_INFO.json" in source
+    # The installer deliberately keeps these clean internal names even though
+    # the public assets are named Portable-x64/CLI-x64.
+    assert 'install_dir / "WingetUniversalDashboard.exe"' in source
+    assert 'install_dir / "WingetUniversalDashboardCLI.exe"' in source
 
 
 def test_installer_temp_cleanup_retries_transient_windows_lock(tmp_path, monkeypatch):
