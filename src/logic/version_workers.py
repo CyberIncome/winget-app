@@ -23,11 +23,10 @@ def winget_version_map_worker(result_queue) -> None:
                 destination,
                 include_versions=True,
             )
-            result = run_command(
-                command,
-                timeout=180,
-                require_process_tree_containment=True,
-            )
+            # ManagedProcessJob enters a kill-on-close Windows Job Object before
+            # invoking this worker, so winget and its descendants inherit the
+            # cancellable worker tree without requiring a redundant nested job.
+            result = run_command(command, timeout=180)
             if not result.ok:
                 raise RuntimeError(
                     f"winget export --include-versions {result.failure_summary()}"
@@ -72,11 +71,7 @@ def exact_package_show_worker(package_ref: dict, result_queue) -> None:
             source=ref.get("source"),
             version=ref.get("version"),
         )
-        result = run_command(
-            command,
-            timeout=90,
-            require_process_tree_containment=True,
-        )
+        result = run_command(command, timeout=90)
         if not result.ok:
             raise RuntimeError(f"winget show {result.failure_summary()}")
         return {
