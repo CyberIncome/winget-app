@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from src.ui.context_polish import apply_context_polish
 from src.ui.layout_polish import apply_layout_polish
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
@@ -23,6 +24,7 @@ def main() -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     window = VersionIntegrityMainWindow()
     apply_layout_polish(window)
+    apply_context_polish(window)
     window.show()
 
     # MainWindow normally schedules startup after 500 ms. Close before that
