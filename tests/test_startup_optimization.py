@@ -59,3 +59,16 @@ def test_app_release_check_is_deferred_during_parallel_base(qtbot):
     window.check_app_release()
     assert window._startup_app_release_deferred is True
     assert "app-release" not in window._managed_jobs
+
+
+def test_inventory_refresh_is_blocked_while_detective_owns_snapshot(qtbot):
+    window = _window(qtbot)
+    window._startup_stage = "ready"
+    sentinel = object()
+    window._managed_jobs["detective"] = sentinel
+
+    window.refresh_inventory()
+
+    assert window._managed_jobs["detective"] is sentinel
+    assert "Detective" in window.status_label.text()
+    assert "inventory" not in window._active_tasks
