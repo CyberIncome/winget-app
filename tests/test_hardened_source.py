@@ -53,6 +53,7 @@ def test_changed_python_sources_parse_as_ast():
         PARSER_FACADE,
         LEGACY_PARSER,
         ROOT / "src" / "ui" / "selection_polish.py",
+        ROOT / "src" / "logic" / "inventory_scan.py",
         ROOT / "src" / "logic" / "worker_jobs.py",
         ROOT / "src" / "logic" / "version_workers.py",
         ROOT / "src" / "logic" / "version_provenance.py",
