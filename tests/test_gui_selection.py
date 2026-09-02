@@ -1,6 +1,7 @@
 """Regression tests for independent, reliable checkbox selection behavior."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtWidgets import QApplication
 
 from src.ui.selection_polish import (
     apply_selection_polish,
@@ -77,3 +78,18 @@ def test_selection_polish_uses_full_width_checkbox_column(qtbot):
     assert window.inventory_table.columnWidth(0) >= 52
     assert window.check_visible_btn.text() == "Check Visible"
     assert window.clear_checked_btn.text() == "Clear Checked"
+
+
+def test_checkbox_filter_is_safe_during_qt_object_teardown(qtbot):
+    window = _window(qtbot)
+    event_filter = window._checkbox_column_filters[0]
+
+    # Force the same QObject destruction path pytest/Qt runs at interpreter
+    # teardown. The filter must not dereference a deleted QTableView wrapper.
+    window.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    QApplication.processEvents()
+
+    # A late teardown event must be an inert no-op even after Qt ownership has
+    # destroyed the table/viewport beneath the retained Python wrapper.
+    assert event_filter.eventFilter(None, QEvent(QEvent.Type.Destroy)) is False
