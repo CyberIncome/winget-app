@@ -141,6 +141,7 @@ def main() -> int:
                 "pytest",
                 "-q",
                 "tests/test_windows_lifecycle.py",
+                "tests/test_windows_job_containment.py",
                 "tests/test_runtime_shutdown.py",
                 "tests/test_remote_versions.py",
             ],
