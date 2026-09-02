@@ -47,4 +47,4 @@ def test_workers_validate_and_atomically_publish_export_and_bound_show_output():
     assert ".wud-export-" in source
     assert ".tmp.json" in source
     assert "os.replace(temporary, destination)" in source
-    assert "require_process_tree_containment=True" in source
+    assert "ManagedProcessJob enters a kill-on-close" in source
