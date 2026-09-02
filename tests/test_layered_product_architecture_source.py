@@ -10,21 +10,21 @@ def _source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_final_entrypoint_uses_integrity_window_and_layout_polish():
+def test_final_entrypoint_uses_integrity_window_and_gui_polish():
     main_source = _source("src/main.py")
     smoke_source = _source("scripts/smoke_gui.py")
     expected_import = (
         "from src.ui.version_integrity_window import VersionIntegrityMainWindow"
     )
-    polish_import = "from src.ui.layout_polish import apply_layout_polish"
-    assert expected_import in main_source
-    assert "window = VersionIntegrityMainWindow()" in main_source
-    assert polish_import in main_source
-    assert "apply_layout_polish(window)" in main_source
-    assert expected_import in smoke_source
-    assert "window = VersionIntegrityMainWindow()" in smoke_source
-    assert polish_import in smoke_source
-    assert "apply_layout_polish(window)" in smoke_source
+    layout_import = "from src.ui.layout_polish import apply_layout_polish"
+    context_import = "from src.ui.context_polish import apply_context_polish"
+    for source in (main_source, smoke_source):
+        assert expected_import in source
+        assert "window = VersionIntegrityMainWindow()" in source
+        assert layout_import in source
+        assert context_import in source
+        assert "apply_layout_polish(window)" in source
+        assert "apply_context_polish(window)" in source
 
 
 def test_product_layers_remain_in_order():
@@ -51,3 +51,14 @@ def test_layout_polish_is_geometry_only_not_package_execution_logic():
     assert "executor" not in source
     assert "get_update_cmd" not in source
     assert "winget" not in source.lower()
+
+
+def test_context_polish_is_presentation_only():
+    source = _source("src/ui/context_polish.py")
+    assert "apply_context_polish" in source
+    assert "build_version_review_dialog" in source
+    assert "update_selected_btn.setVisible" in source
+    assert "search_bar.setVisible" in source
+    assert "get_update_cmd" not in source
+    assert "executor" not in source
+    assert "batch_update(" not in source
