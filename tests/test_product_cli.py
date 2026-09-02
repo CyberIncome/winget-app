@@ -6,6 +6,22 @@ from src.logic import diagnostics as diagnostics_module
 from src.logic import config as config_module
 
 
+def test_cli_help_preserves_complete_command_surface():
+    result = CliRunner().invoke(cli_module.cli, ["--help"])
+    assert result.exit_code == 0, result.output
+    for command in (
+        "check",
+        "detective",
+        "doctor",
+        "ignored",
+        "inventory",
+        "search",
+        "status",
+        "update",
+    ):
+        assert command in result.output
+
+
 def test_cli_version_uses_application_version():
     result = CliRunner().invoke(cli_module.cli, ["--version"])
     assert result.exit_code == 0, result.output
