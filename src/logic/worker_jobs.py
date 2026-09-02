@@ -128,7 +128,11 @@ def package_show_worker(package_ref: dict, result_queue) -> None:
             match_by=ref.get("match_by", "id"),
             source=ref.get("source"),
         )
-        result = run_command(command, timeout=90)
+        result = run_command(
+            command,
+            timeout=90,
+            require_process_tree_containment=True,
+        )
         if not result.ok:
             raise RuntimeError(f"winget show {result.failure_summary()}")
         return {
@@ -155,7 +159,11 @@ def winget_export_worker(
             destination,
             include_versions=bool(include_versions),
         )
-        result = run_command(command, timeout=180)
+        result = run_command(
+            command,
+            timeout=180,
+            require_process_tree_containment=True,
+        )
         if not result.ok:
             raise RuntimeError(f"winget export {result.failure_summary()}")
         if not destination.is_file():
