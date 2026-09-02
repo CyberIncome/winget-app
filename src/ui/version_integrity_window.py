@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex, QTimer
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 
 from src.ui.version_aware_window import VersionAwareMainWindow
 
@@ -89,8 +95,39 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
         self.update_filter_summary.setText(text)
         self.clear_search_btn.setEnabled(bool(self.search_bar.text()))
 
+    @staticmethod
+    def _complete_scan_target(value) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.casefold()
+        if lowered in {"unknown", "???"}:
+            return False
+        if "…" in text or text.endswith("..."):
+            return False
+        return True
+
     def apply_winget_results(self, data):
         result = super().apply_winget_results(data)
+        model = self.proxy_model.sourceModel()
+        if model is not None:
+            changed = False
+            for item in model._data:
+                if not self._is_winget_update_item(item):
+                    continue
+                if self._complete_scan_target(item.get("Available")):
+                    continue
+                item["VersionStatus"] = "incomplete-target"
+                item["VersionNeedsReview"] = True
+                item["VersionExplanation"] = (
+                    "WinGet's displayed target version is incomplete or unknown. "
+                    "This row is informational until a fresh scan yields a complete "
+                    "exact package version; no update command will be generated."
+                )
+                changed = True
+            if changed:
+                model.layoutChanged.emit()
+                self._refresh_version_review_button()
         self._refresh_update_filter_summary()
         return result
 
@@ -114,6 +151,36 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
         if name == "version-map" and self._version_reconcile_pending:
             self._version_reconcile_pending = False
             self._start_version_reconciliation(self._version_scan_generation)
+
+    def _package_ref_for_winget_item(self, item):
+        """Reject incomplete display targets instead of falling back to latest."""
+        if not self._complete_scan_target(item.get("Available")):
+            return None
+        return super()._package_ref_for_winget_item(item)
+
+    def _confirm_batch(self, package_refs) -> bool:
+        """Always surface version-scheme warnings, independent of normal prompts."""
+        review_count = self._refs_requiring_version_review(package_refs)
+        if not review_count:
+            return super()._confirm_batch(package_refs)
+        count = len(package_refs)
+        return (
+            QMessageBox.warning(
+                self,
+                "Confirm Version-Mapping Update",
+                (
+                    f"{review_count} of {count} selected package(s) use Windows and "
+                    "WinGet version values that do not compare cleanly. WinGet still "
+                    "reports them as upgradeable.\n\n"
+                    "The dashboard will target the exact WinGet package versions shown "
+                    "in the current scan. Continue only if those package/source targets "
+                    "are expected."
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            == QMessageBox.Yes
+        )
 
     def remove_package_from_model(self, package_ref):
         """Remove a success row only when package/source/target all still match."""
