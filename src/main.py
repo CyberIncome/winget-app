@@ -150,6 +150,7 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
+    from src.ui.layout_polish import apply_layout_polish
     from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
     app = QApplication.instance()
@@ -164,6 +165,7 @@ def main():
             app.setStyleSheet(file_handle.read())
 
     window = VersionIntegrityMainWindow()
+    apply_layout_polish(window)
     window.show()
 
     if "pytest" in sys.modules:
