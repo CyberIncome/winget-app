@@ -14,9 +14,11 @@ from src.logic.command_runner import CommandResult, run_command
 from src.logic.executor import (
     WingetExecutor,
     validate_app_id,
+    validate_package_version,
     validate_source_name,
 )
 from src.logic.upgrade_parser import WingetParseError, parse_winget_upgrade_strict
+from src.logic.version_provenance import annotate_version_row
 
 
 def setup_logging(verbose):
@@ -78,7 +80,7 @@ def print_table(rows, columns, widths=None):
         version = str(row.get("Version", "")).lower()
         if "unknown" in version or "???" in version:
             click.secho(line, fg="yellow")
-        elif row.get("Available"):
+        elif row.get("Available") or row.get("Target (WinGet)"):
             click.secho(line, fg="green")
         else:
             click.echo(line)
@@ -122,14 +124,13 @@ def check(ctx):
     reg_data = get_registry_data()
     output = _require_success(run_upgrade_scan())
     try:
-        results = parse_winget_upgrade_strict(
-            output, reg_data=reg_data
-        )
+        parsed = parse_winget_upgrade_strict(output, reg_data=reg_data)
     except WingetParseError as exc:
         raise click.ClickException(
             f"could not parse winget upgrade output safely: {exc}"
         ) from exc
 
+    results = [annotate_version_row(dict(item)) for item in parsed]
     if ctx.obj["json"]:
         output_json(results)
         return
@@ -139,10 +140,39 @@ def check(ctx):
         fg="green",
         bold=True,
     )
+    display_rows = [
+        {
+            "Name": row.get("Name", ""),
+            "Id": row.get("Id", ""),
+            "Installed (Windows)": row.get("Version", ""),
+            "Target (WinGet)": row.get("Available", ""),
+            "Version Status": row.get("VersionStatus", ""),
+            "Source": row.get("Source", ""),
+        }
+        for row in results
+    ]
     print_table(
-        results,
-        ["Name", "Id", "Version", "Available", "Source"],
+        display_rows,
+        [
+            "Name",
+            "Id",
+            "Installed (Windows)",
+            "Target (WinGet)",
+            "Version Status",
+            "Source",
+        ],
     )
+    review_count = sum(bool(row.get("VersionNeedsReview")) for row in results)
+    if review_count:
+        click.secho(
+            (
+                f"\n{review_count} row(s) use version values that do not compare "
+                "cleanly between Windows DisplayVersion and WinGet PackageVersion. "
+                "They remain WinGet-reported upgrades; use --json-output for the "
+                "full provenance explanation."
+            ),
+            fg="yellow",
+        )
 
 
 @cli.command()
@@ -191,14 +221,22 @@ def inventory(ctx, app_type):
         "package ID exists in multiple configured sources."
     ),
 )
+@click.option(
+    "--version",
+    "target_version",
+    help=(
+        "Exact WinGet package version for one package. Omit to let WinGet "
+        "select the current latest version."
+    ),
+)
 @click.pass_context
-def update(ctx, app_id, update_all, source):
+def update(ctx, app_id, update_all, source, target_version):
     """Update a specific app or all apps."""
     executor = WingetExecutor()
     if update_all:
-        if source:
+        if source or target_version:
             raise click.UsageError(
-                "--source applies only to a specific app update, not --all"
+                "--source and --version apply only to a specific app update, not --all"
             )
         _progress(ctx, "Updating all packages...", "green")
         _run_update_live(executor.get_update_all_cmd())
@@ -214,12 +252,18 @@ def update(ctx, app_id, update_all, source):
         source = validate_source_name(source)
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--source") from exc
+    try:
+        target_version = validate_package_version(target_version)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="--version") from exc
 
-    _progress(ctx, f"Updating {app_id}...", "green")
+    suffix = f" to {target_version}" if target_version else ""
+    _progress(ctx, f"Updating {app_id}{suffix}...", "green")
     _run_update_live(
         executor.get_update_cmd(
             app_id,
             source=source or None,
+            version=target_version or None,
         )
     )
 
@@ -258,233 +302,3 @@ def _run_update_live(command):
         raise click.ClickException(
             f"winget exited with code {return_code}"
         )
-    click.secho("\nUpdate complete.", fg="green")
-
-
-@cli.command()
-@click.argument("query")
-@click.pass_context
-def search(ctx, query):
-    """Search installed applications by name or ID."""
-    _progress(ctx, f"Searching for {query!r}...")
-    from src.logic.parser import get_total_inventory
-
-    query_lower = query.lower()
-    data = get_total_inventory()
-    matches = [
-        item
-        for item in data
-        if query_lower in item.get("Name", "").lower()
-        or query_lower in item.get("Id", "").lower()
-    ]
-    if ctx.obj["json"]:
-        output_json(matches)
-        return
-    click.secho(
-        f"\n{len(matches)} matches for {query!r}\n",
-        fg="green",
-        bold=True,
-    )
-    print_table(
-        matches, ["Name", "Id", "Version", "Type", "Managed"]
-    )
-
-
-@cli.command()
-@click.option("--limit", default=0, help="Max apps to check (0=all).")
-@click.pass_context
-def detective(ctx, limit):
-    """Check installed apps for remote-version updates."""
-    _progress(ctx, "Running version detective...")
-    from src.logic.config import ConfigManager
-    from src.logic.parser import get_total_inventory
-    from src.logic.remote_versions import check_remote_version
-
-    data = get_total_inventory()
-    config = ConfigManager()
-    results = []
-    checked = 0
-    fallback_values = set(config.url_fallbacks.values())
-    for item in data:
-        url = item.get("URL")
-        if not url:
-            for key, fallback in config.url_fallbacks.items():
-                if key in item["Name"].lower():
-                    url = fallback
-                    break
-        if not url:
-            continue
-        if not (
-            "github.com" in url
-            or "release" in url.lower()
-            or url in fallback_values
-        ):
-            continue
-
-        checked += 1
-        if limit and checked > limit:
-            break
-        if not ctx.obj["json"]:
-            click.echo(f"  Checking {item['Name']}... ", nl=False)
-        remote = check_remote_version(url, item.get("Version"))
-        if remote:
-            results.append(
-                {
-                    "Name": item["Name"],
-                    "Id": item.get("Id", ""),
-                    "Installed": item["Version"],
-                    "Available": remote,
-                    "URL": url,
-                }
-            )
-            if not ctx.obj["json"]:
-                click.secho(
-                    f"UPDATE: {item['Version']} -> {remote}", fg="green"
-                )
-        elif not ctx.obj["json"]:
-            click.secho("up to date", fg="bright_black")
-
-    if ctx.obj["json"]:
-        output_json(results)
-        return
-    if results:
-        click.secho(
-            f"\n{len(results)} updates found (checked {checked} apps)\n",
-            fg="green",
-            bold=True,
-        )
-        print_table(results, ["Name", "Installed", "Available"])
-    else:
-        click.secho(
-            f"\nAll {checked} checked apps are up to date.", fg="green"
-        )
-
-
-@cli.command()
-@click.pass_context
-def status(ctx):
-    """Show system summary: counts, versions, health."""
-    _progress(ctx, "Gathering system status...")
-    from src.logic.parser import get_registry_data, get_total_inventory
-
-    reg_data = get_registry_data()
-    data = get_total_inventory(reg_data=reg_data)
-    output = _require_success(run_upgrade_scan())
-    try:
-        updates = parse_winget_upgrade_strict(
-            output, reg_data=reg_data
-        )
-    except WingetParseError as exc:
-        raise click.ClickException(
-            f"could not parse winget upgrade output safely: {exc}"
-        ) from exc
-
-    summary = {
-        "total_apps": len(data),
-        "installed": sum(
-            1 for item in data if item.get("Type") == "Installed"
-        ),
-        "portable": sum(
-            1 for item in data if item.get("Type") == "Portable"
-        ),
-        "unknown_versions": sum(
-            1
-            for item in data
-            if str(item.get("Version", "")).lower()
-            in {"unknown", "???"}
-        ),
-        "updates_available": len(updates),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    if ctx.obj["json"]:
-        output_json(summary)
-        return
-
-    click.echo()
-    click.secho("Winget Universal Dashboard", fg="cyan", bold=True)
-    click.echo(f"  Total Applications: {summary['total_apps']}")
-    click.echo(f"  Installed: {summary['installed']}")
-    click.echo(f"  Portable: {summary['portable']}")
-    click.echo(f"  Updates Available: {summary['updates_available']}")
-    click.echo(f"  Unknown Versions: {summary['unknown_versions']}")
-    click.echo(f"  Time: {summary['timestamp']}")
-
-
-@cli.command()
-@click.pass_context
-def doctor(ctx):
-    """Show non-secret runtime/build diagnostics for support and troubleshooting."""
-    from src.logic.diagnostics import collect_diagnostics
-
-    _progress(ctx, "Collecting diagnostics...")
-    data = collect_diagnostics()
-    if ctx.obj["json"]:
-        output_json(data)
-        return
-
-    app = data["application"]
-    runtime = data["runtime"]
-    winget = data["winget"]
-    settings = data["settings"]
-    click.echo()
-    click.secho("Winget Universal Dashboard diagnostics", fg="cyan", bold=True)
-    click.echo(f"  Version: {app.get('version')}")
-    click.echo(f"  Commit: {app.get('commit') or 'development'}")
-    click.echo(f"  Frozen executable: {app.get('frozen')}")
-    click.echo(f"  Python: {runtime.get('python')}")
-    click.echo(f"  PySide6: {runtime.get('pyside6') or 'not installed'}")
-    click.echo(f"  Platform: {runtime.get('platform')}")
-    click.echo(f"  Architecture: {runtime.get('architecture')}")
-    click.echo(f"  Winget: {winget.get('version') or 'unavailable'}")
-    click.echo(f"  Config directory: {settings.get('config_dir')}")
-    click.echo(
-        "  GitHub PAT configured: "
-        + ("yes" if settings.get("github_pat_configured") else "no")
-    )
-    click.echo(f"  Ignored package updates: {settings.get('ignored_updates_count')}")
-    click.echo("\nNo credential values are included in this diagnostic output.")
-
-
-@cli.command(name="ignored")
-@click.option(
-    "--clear",
-    "clear_ignored",
-    is_flag=True,
-    help="Restore all package updates previously ignored in the GUI.",
-)
-@click.pass_context
-def ignored_updates(ctx, clear_ignored):
-    """List or clear package-update ignore identities."""
-    from src.logic.config import ConfigManager
-
-    config = ConfigManager()
-    values = config.ignored_updates
-    if clear_ignored:
-        config.clear_ignored_updates()
-        payload = {"cleared": len(values), "ignored_updates": []}
-        if ctx.obj["json"]:
-            output_json(payload)
-        else:
-            click.secho(
-                f"Restored {len(values)} ignored package update(s).",
-                fg="green",
-            )
-        return
-
-    if ctx.obj["json"]:
-        output_json({"ignored_updates": values})
-        return
-    click.secho(
-        f"{len(values)} ignored package update(s)", fg="cyan", bold=True
-    )
-    for value in values:
-        click.echo(f"  {value}")
-
-
-def main():
-    """Run the Click command group."""
-    cli(obj={})
-
-
-if __name__ == "__main__":
-    main()
