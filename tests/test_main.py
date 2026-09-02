@@ -1,6 +1,10 @@
 import os
+from pathlib import Path
 
 from src.main import main
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_qss_exists():
@@ -15,6 +19,12 @@ def test_qss_exists():
     assert "QWidget#actionBar" in content
     assert 'QPushButton[compact="true"]' in content
     assert "QScrollArea#settingsScroll" in content
+
+
+def test_normal_main_arms_optimized_startup_before_legacy_fallback():
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "QTimer.singleShot(100, window.startup_sequence)" in source
+    assert 'os.getenv("WUD_PACKAGED_SMOKE") == "1"' in source
 
 
 def test_main_initialization(qtbot):

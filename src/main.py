@@ -171,6 +171,11 @@ def main():
     apply_context_polish(window)
     apply_selection_polish(window)
     window.show()
+    logger.info(
+        "SESSION WINDOW SHOWN id=%s boot=%.3fs",
+        _SESSION_ID,
+        time.perf_counter() - _BOOT_STARTED_AT,
+    )
 
     if "pytest" in sys.modules:
         window.close()
@@ -179,6 +184,11 @@ def main():
     if os.getenv("WUD_PACKAGED_SMOKE") == "1":
         QTimer.singleShot(200, window.close)
         QTimer.singleShot(350, app.quit)
+    else:
+        # The historical presentation keeps a 500 ms fallback timer. The final
+        # startup controller is idempotent, so start sooner after the first UI
+        # turn and let the older callback become a harmless no-op.
+        QTimer.singleShot(100, window.startup_sequence)
 
     exit_code = app.exec()
     logger.info(
