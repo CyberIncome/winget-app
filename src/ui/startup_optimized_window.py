@@ -46,6 +46,18 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
             return
         HardenedMainWindow.refresh_inventory(self)
 
+    def refresh_inventory(self):
+        """Keep Detective results bound to the inventory snapshot they scanned."""
+        if "detective" in self._managed_jobs:
+            self.logger.info(
+                "Inventory refresh blocked while Detective owns the current snapshot."
+            )
+            self.status_label.setText(
+                "Inventory refresh will be available when background Detective finishes"
+            )
+            return
+        return super().refresh_inventory()
+
     def set_ui_busy(self, status, busy, task_name="core"):
         """Do not make optional startup Detective enrichment block readiness."""
         if self._startup_stage == "parallel-base" and task_name == "detective":
