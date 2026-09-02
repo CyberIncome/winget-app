@@ -34,12 +34,13 @@ def inventory_scan_worker(result_queue) -> None:
     """Collect fresh registry and total inventory data in an isolated process."""
 
     def operation():
-        from src.logic.parser import get_registry_data, get_total_inventory
+        from src.logic.inventory_scan import collect_total_inventory
+        from src.logic.parser import get_registry_data
 
         reg_data = get_registry_data()
         return {
             "registry": reg_data,
-            "inventory": get_total_inventory(reg_data=reg_data),
+            "inventory": collect_total_inventory(reg_data),
         }
 
     _run_worker(result_queue, operation)
