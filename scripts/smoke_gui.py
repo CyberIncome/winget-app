@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create, show, and cleanly close the canonical workbench window without scans."""
+"""Create, show, and cleanly close the canonical version-aware window."""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ if str(ROOT) not in sys.path:
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from src.ui.workbench_window import WorkbenchMainWindow
+from src.ui.version_aware_window import VersionAwareMainWindow
 
 
 def main() -> int:
-    """Exercise canonical workbench Qt construction and shutdown locally."""
+    """Exercise canonical product Qt construction and shutdown locally."""
     app = QApplication.instance() or QApplication(sys.argv)
-    window = WorkbenchMainWindow()
+    window = VersionAwareMainWindow()
     window.show()
 
     # MainWindow normally schedules startup after 500 ms. Close before that
@@ -30,7 +30,7 @@ def main() -> int:
     QTimer.singleShot(350, app.quit)
     exit_code = app.exec()
     if not window._is_closing:
-        raise RuntimeError("workbench window did not execute clean shutdown")
+        raise RuntimeError("version-aware window did not execute clean shutdown")
     return exit_code
 
 
