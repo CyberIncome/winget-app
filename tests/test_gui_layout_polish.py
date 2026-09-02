@@ -44,7 +44,7 @@ def test_footer_is_one_action_row_when_console_hidden(qtbot):
     panel = window.bottom_action_panel
     root_layout = panel.layout()
     assert isinstance(root_layout, QBoxLayout)
-    assert root_layout.direction() == QBoxLayout.TopToBottom
+    assert root_layout.direction() == QBoxLayout.Direction.TopToBottom
     assert window.console.isHidden()
     assert panel.maximumHeight() <= 60
 
@@ -55,7 +55,7 @@ def test_footer_is_one_action_row_when_console_hidden(qtbot):
             action_layout = nested
             break
     assert isinstance(action_layout, QBoxLayout)
-    assert action_layout.direction() == QBoxLayout.LeftToRight
+    assert action_layout.direction() == QBoxLayout.Direction.LeftToRight
     assert [
         window.refresh_btn.isHidden(),
         window.scan_inventory_btn.isHidden(),
