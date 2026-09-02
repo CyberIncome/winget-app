@@ -11,6 +11,10 @@ def test_qss_exists():
     assert "QMainWindow" in content
     assert "#11131c" in content
     assert "QLabel#statBadge" in content
+    assert "QWidget#updatesToolbar" in content
+    assert "QWidget#actionBar" in content
+    assert 'QPushButton[compact="true"]' in content
+    assert "QScrollArea#settingsScroll" in content
 
 
 def test_main_initialization(qtbot):
