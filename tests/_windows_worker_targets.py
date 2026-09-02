@@ -22,11 +22,11 @@ def sleep_then_succeed(seconds, result_queue) -> None:
 
 def spawn_grandchild_then_sleep(sentinel_path, seconds, result_queue) -> None:
     """Spawn a delayed grandchild so cancellation can prove tree containment."""
+    sentinel = str(Path(sentinel_path))
     child_code = (
         "import pathlib,time; "
         "time.sleep(1.0); "
-        f"pathlib.Path({str(Path(sentinel_path))!r}).write_text(" 
-        "'survived', encoding='utf-8')"
+        f"pathlib.Path({sentinel!r}).write_text('survived', encoding='utf-8')"
     )
     subprocess.Popen([sys.executable, "-c", child_code])
     time.sleep(seconds)
