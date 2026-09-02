@@ -89,3 +89,16 @@ def github_rate_limit_worker(pat: str, result_queue) -> None:
         }
 
     _run_worker(result_queue, operation)
+
+
+def app_release_worker(
+    current_version: str, pat: str, result_queue
+) -> None:
+    """Check this application's latest published GitHub release."""
+
+    def operation():
+        from src.logic.app_release import check_latest_release
+
+        return check_latest_release(current_version, pat)
+
+    _run_worker(result_queue, operation)
