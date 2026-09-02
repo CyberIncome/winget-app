@@ -1,8 +1,9 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/main.py` is the canonical GUI entry point and constructs `VersionIntegrityMainWindow`.
-- The canonical GUI inheritance stack is intentionally layered: `VersionIntegrityMainWindow -> VersionAwareMainWindow -> WorkbenchMainWindow -> ProductMainWindow -> ExperienceMainWindow -> RuntimeMainWindow -> ProductionMainWindow -> HardenedMainWindow -> historical presentation`.
+- `src/main.py` is the canonical GUI entry point and constructs `StartupOptimizedMainWindow`.
+- The canonical GUI inheritance stack is intentionally layered: `StartupOptimizedMainWindow -> VersionIntegrityMainWindow -> VersionAwareMainWindow -> WorkbenchMainWindow -> ProductMainWindow -> ExperienceMainWindow -> RuntimeMainWindow -> ProductionMainWindow -> HardenedMainWindow -> historical presentation`.
+- `src/ui/startup_optimized_window.py` owns the final startup schedule: authoritative WinGet and local inventory scans may run concurrently, readiness waits for both base scans, and optional Detective/GitHub/app-release enrichment is deferred until after that base boundary. Inventory refresh remains guarded while Detective owns an inventory snapshot.
 - `src/ui/version_integrity_window.py` owns final scan-target identity and asynchronous version-reconciliation lifecycle guards.
 - `src/ui/version_aware_window.py` owns Windows-vs-WinGet version provenance, exact target-version execution, version-review UX, and read-only double-click inspection.
 - `src/ui/workbench_window.py` owns WinGet restore-list export, exact package inspection, and update-batch cancellation.
@@ -10,11 +11,14 @@
 - `src/ui/experience_window.py` owns app-release awareness, confirmation policy, About/diagnostics surfaces, ignored-update settings, and batch-result summaries.
 - `src/ui/runtime_window.py` remains the final release-facing QProcess/shutdown exception boundary beneath those product layers.
 - `src/ui/production_window.py` contains package-provenance, process-protocol, and Qt compatibility guards.
-- `src/ui/hardened_window.py` owns staged startup, managed process jobs, watchdog semantics, and the primary hardened controller behavior.
+- `src/ui/hardened_window.py` owns managed process jobs, watchdog semantics, deterministic shutdown, and the accepted hardened controller behavior beneath the optimized startup layer.
+- `src/ui/selection_polish.py` is the final checkbox/row-selection interaction pass. Checked rows are action state; row highlighting is inspection state. Do not reconnect the historical bidirectional selection-to-checkbox mirror.
+- `src/ui/layout_polish.py` and `src/ui/context_polish.py` normalize the fully constructed layered GUI after feature construction without owning package execution logic.
 - `src/ui/main_window.py` is an import-compatible model/presentation shim; the historical implementation is preserved in `src/ui/legacy_window.py`.
+- `src/logic/inventory_scan.py` provides the managed GUI inventory fast path and reuses one `WScript.Shell` COM automation object for a whole shortcut scan while preserving the inventory surface.
 - `src/logic/` contains command construction, strict Winget parsing, version provenance, bounded subprocess capture, Windows Job Object containment, configuration, HTTPS policy, worker targets, history, release awareness, and legacy inventory/version heuristics.
 - `tests/` contains pytest suites (`test_*.py`) covering UI and logic, including native Windows process-tree containment.
-- `scripts/verify_windows.py` is the release-relevant local Windows verification gate; `scripts/smoke_gui.py` exercises canonical product Qt construction/teardown without running scans.
+- `scripts/verify_windows.py` is the release-relevant local Windows verification gate; `scripts/smoke_gui.py` exercises canonical polished product Qt construction/teardown without running scans.
 - `scripts/build_windows.py` builds the public portable GUI/CLI assets; `scripts/build_release.py` builds the complete installer/release bundle.
 - `conductor/` stores historical product specs, plans, and style guides.
 - `docs/reliability-hardening/` is historical evidence for the accepted hardening baseline. Do not rewrite past PASS claims to imply later product-evolution work was part of that acceptance.
@@ -50,6 +54,7 @@ Follow `conductor/code_styleguides/*.md` (Google Python Style Guide summary):
 - Native PySide6/pywin32/COM/WinGet behavior must pass `scripts/verify_windows.py` on Windows before a new branch is described as Windows-verified.
 - Packaged-release acceptance should pass `python scripts/verify_windows.py --live-winget --installer`.
 - Managed read-only WinGet subprocesses that run inside cancellable spawned workers must require Windows process-tree containment; cancellation must not strand a descendant `winget.exe`.
+- Startup optimization must not weaken package authority: base readiness still requires the authoritative WinGet scan and local inventory scan to settle, while optional enrichment may continue afterward.
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short and imperative; Conventional Commit style is preferred.
