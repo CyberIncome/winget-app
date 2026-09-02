@@ -15,7 +15,7 @@ def test_main_and_smoke_route_through_product_window():
     assert "window = ProductMainWindow()" in smoke_source
 
 
-def test_product_layer_adds_bounded_history_above_experience_layer():
+def test_product_layer_adds_bounded_history_and_safe_automation():
     source = (ROOT / "src" / "ui" / "product_window.py").read_text(
         encoding="utf-8"
     )
@@ -27,6 +27,12 @@ def test_product_layer_adds_bounded_history_above_experience_layer():
     assert "export_dashboard_snapshot" in source
     assert "QFileDialog.getSaveFileName" in source
     assert 'if "pytest" in sys.modules' in source
+    assert "auto_refresh_minutes" in source
+    assert "self._active_tasks or self.current_operation or self._managed_jobs" in source
+    assert "self.refresh_updates()" in source
+    assert "_stop_timer_safely" in source
+    assert "update_skip_identity" in source
+    assert "a newer version will appear normally" in source
 
 
 def test_experience_layer_preserves_runtime_boundary_and_managed_workers():
@@ -45,11 +51,16 @@ def test_experience_layer_preserves_runtime_boundary_and_managed_workers():
 
 
 def test_product_settings_expose_user_controls():
-    source = (ROOT / "src" / "ui" / "experience_window.py").read_text(
+    experience = (ROOT / "src" / "ui" / "experience_window.py").read_text(
         encoding="utf-8"
     )
-    assert "Automatically check for new dashboard releases" in source
-    assert "Confirm before starting package updates" in source
-    assert "Run remote-version detective after inventory scans" in source
-    assert "Restore Ignored Updates" in source
-    assert "Copy Diagnostics" in source
+    product = (ROOT / "src" / "ui" / "product_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Automatically check for new dashboard releases" in experience
+    assert "Confirm before starting package updates" in experience
+    assert "Run remote-version detective after inventory scans" in experience
+    assert "Restore Ignored Updates" in experience
+    assert "Copy Diagnostics" in experience
+    assert "Automatic update scan:" in product
+    assert "Export Dashboard Snapshot" in product

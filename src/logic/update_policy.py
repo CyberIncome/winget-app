@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-_MAX_IDENTITY_LENGTH = 768
+_MAX_IDENTITY_LENGTH = 1024
 
 
 def package_identity(item: dict) -> str | None:
@@ -20,7 +20,18 @@ def package_identity(item: dict) -> str | None:
     return value if len(value) <= _MAX_IDENTITY_LENGTH else None
 
 
+def update_skip_identity(item: dict) -> str | None:
+    """Return an identity for one specific offered update version."""
+    base = package_identity(item)
+    available = str(item.get("Available") or "").strip().casefold()
+    if not base or not available:
+        return None
+    value = f"{base}|available:{available}"
+    return value if len(value) <= _MAX_IDENTITY_LENGTH else None
+
+
 def normalize_ignored_updates(values) -> list[str]:
+    """Normalize both legacy package-wide and version-specific ignore keys."""
     if not isinstance(values, list):
         return []
     result = []
@@ -45,6 +56,18 @@ def normalize_ignored_updates(values) -> list[str]:
     return result
 
 
+def is_update_ignored(item: dict, ignored_values) -> bool:
+    ignored = set(normalize_ignored_updates(ignored_values))
+    package_key = package_identity(item)
+    version_key = update_skip_identity(item)
+    # Package-only identities are retained for backward compatibility and for
+    # advanced users who may have intentionally persisted a permanent ignore.
+    return bool(
+        (package_key and package_key in ignored)
+        or (version_key and version_key in ignored)
+    )
+
+
 def filter_ignored_updates(
     items: list[dict], ignored_values
 ) -> tuple[list[dict], int]:
@@ -52,8 +75,12 @@ def filter_ignored_updates(
     kept = []
     removed = 0
     for item in items or []:
-        identity = package_identity(item)
-        if identity and identity in ignored:
+        package_key = package_identity(item)
+        version_key = update_skip_identity(item)
+        if (
+            (package_key and package_key in ignored)
+            or (version_key and version_key in ignored)
+        ):
             removed += 1
         else:
             kept.append(item)

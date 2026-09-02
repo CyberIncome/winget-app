@@ -6,8 +6,10 @@ from src.logic.app_release import check_latest_release, compare_semver, parse_se
 from src.logic.update_batch import BatchResultTracker
 from src.logic.update_policy import (
     filter_ignored_updates,
+    is_update_ignored,
     normalize_ignored_updates,
     package_identity,
+    update_skip_identity,
 )
 
 
@@ -128,16 +130,18 @@ def test_release_check_rejects_malformed_tag():
         )
 
 
-def test_ignored_updates_are_source_aware_and_normalized():
+def test_legacy_package_wide_ignored_updates_remain_supported():
     winget = {
         "Name": "Example",
         "Id": "Vendor.Example",
         "Source": "winget",
+        "Available": "2.0",
     }
     private = {
         "Name": "Example",
         "Id": "Vendor.Example",
         "Source": "private",
+        "Available": "2.0",
     }
     identity = package_identity(winget)
     assert identity == "id:vendor.example|source:winget"
@@ -146,6 +150,28 @@ def test_ignored_updates_are_source_aware_and_normalized():
     kept, removed = filter_ignored_updates([winget, private], ignored)
     assert kept == [private]
     assert removed == 1
+
+
+def test_skipping_current_version_does_not_hide_a_future_version():
+    offered = {
+        "Name": "Example",
+        "Id": "Vendor.Example",
+        "Source": "winget",
+        "Available": "2.0.0",
+    }
+    future = {**offered, "Available": "2.1.0"}
+    skip_key = update_skip_identity(offered)
+
+    assert skip_key == "id:vendor.example|source:winget|available:2.0.0"
+    assert is_update_ignored(offered, [skip_key]) is True
+    assert is_update_ignored(future, [skip_key]) is False
+    kept, removed = filter_ignored_updates([offered, future], [skip_key])
+    assert kept == [future]
+    assert removed == 1
+
+
+def test_skip_identity_requires_a_specific_available_version():
+    assert update_skip_identity({"Id": "Vendor.Example", "Source": "winget"}) is None
 
 
 def test_batch_tracker_counts_retry_only_when_terminal_state_recorded():
