@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import src.ui.process_jobs as process_jobs
+from src.logic.windows_job import WindowsKillOnCloseJob
 from src.ui.process_jobs import ManagedProcessJob
 
 
@@ -56,6 +58,14 @@ class HostileQueue:
         raise ValueError("queue cancel failed")
 
 
+class EnvelopeQueue:
+    def __init__(self):
+        self.values = []
+
+    def put(self, value):
+        self.values.append(value)
+
+
 def test_cleanup_contains_process_and_queue_state_errors(qtbot):
     job = ManagedProcessJob("hostile-cleanup", lambda queue: None)
     process = HostileProcess()
@@ -82,3 +92,32 @@ def test_invalid_worker_envelope_fails_closed(qtbot):
 
     assert "invalid result envelope" in failed.args[1]
     assert job._done is True
+
+
+def test_worker_entry_reports_containment_failure_without_running_target(monkeypatch):
+    queue = EnvelopeQueue()
+    target_calls = []
+
+    monkeypatch.setattr(process_jobs.os, "name", "nt")
+
+    def fail_containment():
+        raise OSError("synthetic containment failure")
+
+    monkeypatch.setattr(
+        WindowsKillOnCloseJob,
+        "attach_current_process",
+        fail_containment,
+    )
+
+    process_jobs._managed_process_entry(
+        lambda result_queue: target_calls.append(result_queue),
+        (),
+        queue,
+    )
+
+    assert target_calls == []
+    assert len(queue.values) == 1
+    envelope = queue.values[0]
+    assert envelope["ok"] is False
+    assert envelope["error_type"] == "OSError"
+    assert "synthetic containment failure" in envelope["error"]
