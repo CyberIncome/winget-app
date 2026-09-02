@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 import subprocess
 import tempfile
 from typing import Mapping, Sequence
 
 from src.logic.output_decode import decode_process_bytes
+from src.logic.windows_job import WindowsKillOnCloseJob
 
 
 MAX_CAPTURE_BYTES = 5 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -78,10 +81,21 @@ def _stop_timed_out_process(process) -> None:
         pass
 
 
+def _close_containment_job(job) -> None:
+    if job is None:
+        return
+    try:
+        job.close()
+    except Exception as exc:
+        logger.warning("Could not close subprocess containment job: %s", exc)
+
+
 def run_command(
     command: Sequence[str],
     timeout: float = 300,
     environment: Mapping[str, str] | None = None,
+    *,
+    require_process_tree_containment: bool = False,
 ) -> CommandResult:
     """Run a command and return a structured, locale-aware bounded outcome.
 
@@ -93,6 +107,11 @@ def run_command(
     WinGet formats its tabular output using the console width. Force a wide
     ``COLUMNS`` value unless the caller explicitly supplies another one so the
     CLI receives the same non-truncated protocol surface as the GUI.
+
+    Managed Windows workers can set ``require_process_tree_containment``. In
+    that mode the subprocess is assigned to a kill-on-close Windows Job Object.
+    If containment cannot be established, the subprocess is stopped and the
+    command fails explicitly rather than becoming impossible to cancel safely.
     """
     normalized = tuple(str(part) for part in command)
     process_environment = os.environ.copy()
@@ -114,28 +133,53 @@ def run_command(
                 stderr=stderr_file,
                 env=process_environment,
             )
-            timed_out = False
-            try:
-                returncode = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _stop_timed_out_process(process)
-                returncode = None
+            containment_job = None
+            if require_process_tree_containment and os.name == "nt":
+                try:
+                    containment_job = WindowsKillOnCloseJob.attach(process)
+                except Exception as exc:
+                    _stop_timed_out_process(process)
+                    return CommandResult(
+                        command=normalized,
+                        returncode=None,
+                        stdout="",
+                        stderr="",
+                        start_error=(
+                            "process-tree containment could not be established: "
+                            f"{exc}"
+                        ),
+                    )
 
-            stdout, stdout_overflow = _read_capture(
-                stdout_file, MAX_CAPTURE_BYTES
-            )
-            stderr, stderr_overflow = _read_capture(
-                stderr_file, MAX_CAPTURE_BYTES
-            )
-            return CommandResult(
-                command=normalized,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
-                timed_out=timed_out,
-                output_overflow=stdout_overflow or stderr_overflow,
-            )
+            try:
+                timed_out = False
+                try:
+                    returncode = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    # Closing the Windows job first terminates descendants as well
+                    # as the immediate subprocess; then retain the old bounded
+                    # parent-process kill/wait fallback for every platform.
+                    _close_containment_job(containment_job)
+                    containment_job = None
+                    _stop_timed_out_process(process)
+                    returncode = None
+
+                stdout, stdout_overflow = _read_capture(
+                    stdout_file, MAX_CAPTURE_BYTES
+                )
+                stderr, stderr_overflow = _read_capture(
+                    stderr_file, MAX_CAPTURE_BYTES
+                )
+                return CommandResult(
+                    command=normalized,
+                    returncode=returncode,
+                    stdout=stdout,
+                    stderr=stderr,
+                    timed_out=timed_out,
+                    output_overflow=stdout_overflow or stderr_overflow,
+                )
+            finally:
+                _close_containment_job(containment_job)
     except OSError as exc:
         return CommandResult(
             command=normalized,
