@@ -73,6 +73,17 @@ def build_version_review_dialog(window) -> QDialog:
     dialog.setWindowTitle("Version Mapping Review")
     dialog.resize(920, 600)
     dialog.setMinimumSize(720, 460)
+    # QWidget is transparent in the global theme; give this top-level dialog
+    # an explicit canvas while allowing the normal app stylesheet to style
+    # its child table, labels, scrollbars, and buttons.
+    dialog.setStyleSheet(
+        "QDialog#versionReviewDialog { background-color: #11131c; }"
+        "QPlainTextEdit#versionReviewDetails {"
+        " background-color: rgba(13, 15, 24, 0.94);"
+        " border: 1px solid #414868; border-radius: 8px; padding: 10px;"
+        " font-family: 'Cascadia Code', 'Consolas', monospace; color: #cdd6f4;"
+        "}"
+    )
 
     layout = QVBoxLayout(dialog)
     layout.setContentsMargins(18, 16, 18, 16)
@@ -96,6 +107,7 @@ def build_version_review_dialog(window) -> QDialog:
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     table.setAlternatingRowColors(True)
+    table.setWordWrap(False)
     table.verticalHeader().setVisible(False)
 
     for row_index, item in enumerate(rows):
