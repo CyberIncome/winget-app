@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QBoxLayout, QScrollArea
+from PySide6.QtWidgets import QApplication, QBoxLayout, QScrollArea
 
 from src.ui.layout_polish import apply_layout_polish
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
@@ -23,6 +23,19 @@ def test_updates_toolbar_is_compact_and_main_splitter_keeps_space(qtbot):
     assert window.update_details.maximumWidth() <= 450
     assert window.table.minimumWidth() >= 500
     assert window.update_splitter.childrenCollapsible() is False
+
+
+def test_normal_desktop_geometry_cannot_recreate_giant_dead_space(qtbot):
+    window = _polished_window(qtbot)
+    window.resize(1400, 900)
+    window.show()
+    QApplication.processEvents()
+
+    page_height = window.update_tab.height()
+    assert page_height > 300
+    assert window.updates_toolbar.height() <= 52
+    assert window.update_splitter.height() >= int(page_height * 0.78)
+    assert window.bottom_action_panel.height() <= 60
 
 
 def test_footer_is_one_action_row_when_console_hidden(qtbot):
