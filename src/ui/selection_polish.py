@@ -13,26 +13,58 @@ class _CheckboxColumnFilter(QObject):
     """Make the full first-column cell a reliable checkbox hit target."""
 
     def __init__(self, window, table, proxy):
-        super().__init__(table)
+        # Parent the filter to the viewport it observes so Qt tears the filter
+        # down with that viewport instead of leaving it alive behind the table.
+        super().__init__(table.viewport())
         self._window = window
         self._table = table
         self._proxy = proxy
+        table.destroyed.connect(self._detach_table)
+
+    def _detach_table(self, *_args):
+        """Drop Python references before the wrapped Qt table is destroyed."""
+        self._table = None
+        self._proxy = None
+        self._window = None
 
     def _index_for_event(self, event):
+        table = self._table
+        if table is None:
+            return None
         position = getattr(event, "position", None)
         if position is None:
             return None
-        return self._table.indexAt(position().toPoint())
+        try:
+            return table.indexAt(position().toPoint())
+        except RuntimeError:
+            # PySide may deliver teardown events while the Python wrapper still
+            # exists but its underlying C++ QTableView has already been deleted.
+            self._detach_table()
+            return None
 
     def eventFilter(self, watched, event):
-        if watched is not self._table.viewport():
-            return False
-        if event.type() not in {
+        # Teardown sends non-mouse events through installed filters. Check the
+        # event type before touching the QTableView wrapper so interpreter/Qt
+        # shutdown cannot dereference an already-deleted C++ object.
+        event_type = event.type()
+        if event_type not in {
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
         }:
             return False
         if event.button() != Qt.MouseButton.LeftButton:
+            return False
+
+        table = self._table
+        proxy = self._proxy
+        window = self._window
+        if table is None or proxy is None:
+            return False
+        try:
+            if watched is not table.viewport():
+                return False
+        except RuntimeError:
+            self._detach_table()
             return False
 
         index = self._index_for_event(event)
@@ -41,13 +73,17 @@ class _CheckboxColumnFilter(QObject):
 
         # Consume both halves of the click so Qt's default item delegate cannot
         # also toggle the native indicator after our full-cell toggle.
-        if event.type() == QEvent.Type.MouseButtonRelease:
+        if event_type == QEvent.Type.MouseButtonRelease:
             return True
 
-        model = self._proxy.sourceModel()
+        try:
+            model = proxy.sourceModel()
+        except RuntimeError:
+            self._detach_table()
+            return False
         if model is None:
             return True
-        source_index = self._proxy.mapToSource(index)
+        source_index = proxy.mapToSource(index)
         row = source_index.row()
         if not 0 <= row < len(getattr(model, "_data", [])):
             return True
@@ -65,8 +101,16 @@ class _CheckboxColumnFilter(QObject):
                 Qt.ItemDataRole.CheckStateRole,
             )
 
-        refresh = getattr(self._window, "_refresh_update_filter_summary", None)
-        if self._table is getattr(self._window, "table", None) and callable(refresh):
+        refresh = (
+            getattr(window, "_refresh_update_filter_summary", None)
+            if window is not None
+            else None
+        )
+        if (
+            window is not None
+            and table is getattr(window, "table", None)
+            and callable(refresh)
+        ):
             refresh()
         return True
 
@@ -74,7 +118,11 @@ class _CheckboxColumnFilter(QObject):
 def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
     if getattr(window, "_is_closing", False):
         return
-    window.update_detail_pane(table, proxy, pane)
+    try:
+        window.update_detail_pane(table, proxy, pane)
+    except RuntimeError:
+        # Selection signals can be drained while Qt is destroying the window.
+        return
 
 
 def _decouple_row_selection(window, table, proxy, pane) -> None:
