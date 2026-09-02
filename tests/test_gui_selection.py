@@ -81,17 +81,15 @@ def test_selection_polish_restores_full_width_after_model_reload(qtbot):
     # Production model loaders replace each proxy source model and historically
     # resize the checkbox column back to 40 px afterward. Simulate that exact
     # ordering and confirm the queued selection-polish correction wins.
-    window.proxy_model.setSourceModel(
-        UpdateModel(
-            [{"Name": "Gamma", "Id": "Example.Gamma"}],
-        )
+    update_model = UpdateModel(
+        [{"Name": "Gamma", "Id": "Example.Gamma"}],
     )
-    window.inventory_proxy.setSourceModel(
-        UpdateModel(
-            [{"Name": "Gamma", "Id": "Example.Gamma"}],
-            is_inventory=True,
-        )
+    inventory_model = UpdateModel(
+        [{"Name": "Gamma", "Id": "Example.Gamma"}],
+        is_inventory=True,
     )
+    window.proxy_model.setSourceModel(update_model)
+    window.inventory_proxy.setSourceModel(inventory_model)
     window.table.setColumnWidth(0, 40)
     window.inventory_table.setColumnWidth(0, 40)
     QApplication.processEvents()
