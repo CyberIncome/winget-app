@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import time
 import traceback
 from typing import Any, Callable
 import uuid
@@ -31,16 +32,30 @@ def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
 
 
 def inventory_scan_worker(result_queue) -> None:
-    """Collect fresh registry and total inventory data in an isolated process."""
+    """Collect fresh registry and bounded inventory data in an isolated process."""
 
     def operation():
         from src.logic.inventory_scan import collect_total_inventory
         from src.logic.parser import get_registry_data
 
+        started = time.monotonic()
+        registry_started = time.monotonic()
         reg_data = get_registry_data()
+        registry_seconds = time.monotonic() - registry_started
+        inventory, inventory_timings = collect_total_inventory(
+            reg_data,
+            include_timings=True,
+        )
         return {
             "registry": reg_data,
-            "inventory": collect_total_inventory(reg_data),
+            "inventory": inventory,
+            "timings": {
+                "registry_seconds": round(registry_seconds, 3),
+                **inventory_timings,
+                "worker_total_seconds": round(time.monotonic() - started, 3),
+                "registry_items": len(reg_data),
+                "inventory_items": len(inventory),
+            },
         }
 
     _run_worker(result_queue, operation)
