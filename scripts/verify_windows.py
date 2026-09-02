@@ -17,6 +17,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from release_common import CLI_EXE, GUI_EXE
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -158,7 +160,7 @@ def main() -> int:
             None,
         ),
         (
-            "runtime GUI create/close smoke",
+            "canonical GUI create/close smoke",
             [sys.executable, "scripts/smoke_gui.py"],
             60,
             None,
@@ -178,8 +180,8 @@ def main() -> int:
             ]
         )
 
-    gui_artifact = ROOT / "dist" / "WingetUniversalDashboard.exe"
-    cli_artifact = ROOT / "dist" / "WingetUniversalDashboardCLI.exe"
+    gui_artifact = GUI_EXE
+    cli_artifact = CLI_EXE
 
     if args.installer:
         checks.extend(
