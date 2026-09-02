@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QModelIndex, QTimer
+from PySide6.QtCore import QModelIndex, QTimer, Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -74,24 +74,42 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
 
         self.table.setToolTip(
             "Installed (Windows) is the Apps & Features/ARP display version. "
-            "Target (WinGet) is the source package version WinGet reports. "
-            "These numbering schemes can legitimately differ."
+            "Reported Target is the WinGet package target for Winget rows or a "
+            "remote-version estimate for Detective informational rows."
         )
         self.search_bar.textChanged.connect(
             lambda _text: QTimer.singleShot(0, self._refresh_update_filter_summary)
         )
         self._refresh_update_filter_summary()
 
+    def _apply_version_headers(self):
+        """Use a neutral target heading because Detective rows share the table."""
+        super()._apply_version_headers()
+        model = self.proxy_model.sourceModel()
+        if model is None or len(getattr(model, "headers", [])) < 5:
+            return
+        model.headers[4] = "Reported Target"
+        try:
+            model.headerDataChanged.emit(Qt.Horizontal, 4, 4)
+        except Exception:
+            pass
+
     def _refresh_update_filter_summary(self):
         if not hasattr(self, "update_filter_summary"):
             return
         model = self.proxy_model.sourceModel()
-        total = len(getattr(model, "_data", [])) if model is not None else 0
+        rows = list(getattr(model, "_data", [])) if model is not None else []
+        total = len(rows)
         visible = self.proxy_model.rowCount()
         review = self._version_review_count()
+        informational = sum(
+            1 for item in rows if item.get("UpdateSource") == "detective"
+        )
         text = f"{visible} shown / {total} total"
         if review:
             text += f" • {review} version mapping review"
+        if informational:
+            text += f" • {informational} Detective informational"
         self.update_filter_summary.setText(text)
         self.clear_search_btn.setEnabled(bool(self.search_bar.text()))
 
@@ -106,6 +124,50 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
         if "…" in text or text.endswith("..."):
             return False
         return True
+
+    @staticmethod
+    def _version_context_text(item: dict) -> str:
+        name = str(item.get("Name") or item.get("Id") or "Package")
+        lines = [
+            name,
+            f"Package ID: {item.get('Id') or 'unavailable'}",
+            f"Source: {item.get('Source') or 'unavailable'}",
+            "",
+            f"Installed (Windows / Apps & Features): {item.get('Version') or 'unknown'}",
+        ]
+        source_installed = item.get("SourceInstalledVersion")
+        if source_installed:
+            lines.append(f"Installed (WinGet source mapping): {source_installed}")
+
+        if item.get("UpdateSource") == "winget":
+            lines.extend(
+                [
+                    f"Target (WinGet package): {item.get('Available') or 'unknown'}",
+                    f"Version assessment: {item.get('VersionStatus') or 'not assessed'}",
+                    "",
+                    str(item.get("VersionExplanation") or ""),
+                    "",
+                    "If updated, the dashboard will target the exact WinGet package "
+                    "version shown above rather than whatever becomes latest later.",
+                    "Double-click this row to load WinGet metadata for that exact target.",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"Reported remote target (Detective): {item.get('Available') or 'unknown'}",
+                    "Version assessment: informational remote finding",
+                    "",
+                    str(
+                        item.get("VersionExplanation")
+                        or "Detective remote-version findings are informational and are not "
+                        "used to generate WinGet update commands."
+                    ),
+                    "",
+                    "This row cannot trigger a WinGet package update.",
+                ]
+            )
+        return "\n".join(lines)
 
     def apply_winget_results(self, data):
         result = super().apply_winget_results(data)
@@ -128,6 +190,7 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
             if changed:
                 model.layoutChanged.emit()
                 self._refresh_version_review_button()
+        self._apply_version_headers()
         self._refresh_update_filter_summary()
         return result
 
@@ -138,6 +201,23 @@ class VersionIntegrityMainWindow(VersionAwareMainWindow):
 
     def _detective_job_succeeded(self, results):
         result = super()._detective_job_succeeded(results)
+        model = self.proxy_model.sourceModel()
+        if model is not None:
+            changed = False
+            for item in model._data:
+                if item.get("UpdateSource") != "detective":
+                    continue
+                item["VersionStatus"] = "informational"
+                item["VersionNeedsReview"] = False
+                item["VersionExplanation"] = (
+                    "Detective found a remote version candidate outside the authoritative "
+                    "WinGet upgrade scan. This row is informational and cannot generate "
+                    "a package update command."
+                )
+                changed = True
+            if changed:
+                model.layoutChanged.emit()
+        self._apply_version_headers()
         self._refresh_update_filter_summary()
         return result
 
