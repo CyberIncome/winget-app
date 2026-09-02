@@ -30,7 +30,10 @@ def _repolish(widget) -> None:
 
 def _mark_compact(button: QPushButton) -> None:
     button.setProperty("compact", True)
-    button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+    button.setSizePolicy(
+        QSizePolicy.Policy.Minimum,
+        QSizePolicy.Policy.Fixed,
+    )
     _repolish(button)
 
 
@@ -54,15 +57,23 @@ def _polish_header(window) -> None:
 
     warning = getattr(window, "admin_warning", None)
     if warning is not None:
-        warning.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        warning.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Fixed,
+        )
         warning.setMaximumWidth(max(130, warning.sizeHint().width() + 20))
-        warning.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        warning.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
     search = window.search_bar
     # Undo the historical fixed 360 px width so the header can compress.
     search.setMinimumWidth(200)
     search.setMaximumWidth(360)
-    search.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+    search.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Fixed,
+    )
 
     for card in (
         window.stat_installed,
@@ -94,7 +105,10 @@ def _polish_content_splitter(splitter, table, details) -> None:
     table.setMinimumWidth(520)
     details.setMinimumWidth(250)
     details.setMaximumWidth(440)
-    details.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+    details.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Expanding,
+    )
     splitter.setSizes([1000, 340])
 
 
@@ -108,7 +122,10 @@ def _polish_updates_toolbar(window) -> None:
         return
     window.updates_toolbar = toolbar
     toolbar.setObjectName("updatesToolbar")
-    toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    toolbar.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Fixed,
+    )
     toolbar.setMinimumHeight(38)
     toolbar.setMaximumHeight(52)
     toolbar.setToolTip(
@@ -141,7 +158,8 @@ def _polish_updates_toolbar(window) -> None:
 
     window.update_filter_summary.setMinimumWidth(0)
     window.update_filter_summary.setSizePolicy(
-        QSizePolicy.Expanding, QSizePolicy.Preferred
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Preferred,
     )
 
     update_layout.setContentsMargins(10, 6, 10, 8)
@@ -163,9 +181,13 @@ def _wrap_settings_page(window) -> None:
     scroll = QScrollArea()
     scroll.setObjectName("settingsScroll")
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(
+        Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    scroll.setVerticalScrollBarPolicy(
+        Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
     scroll.setWidget(window.settings_tab)
     window.stack.insertWidget(index, scroll)
     window.settings_scroll = scroll
@@ -201,19 +223,22 @@ def _polish_footer(window) -> None:
 
     window.bottom_action_panel = panel
     panel.setObjectName("actionBar")
-    panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+    panel.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Maximum,
+    )
     _repolish(panel)
 
     # The historical footer was a horizontal console plus a *vertical* stack
     # of five buttons. That consumed ~200 px even with the console hidden.
     # Make the footer console-over-actions and keep the action strip one row.
-    root_layout.setDirection(QBoxLayout.TopToBottom)
+    root_layout.setDirection(QBoxLayout.Direction.TopToBottom)
     root_layout.setContentsMargins(16, 6, 16, 8)
     root_layout.setSpacing(7)
 
     actions = _find_layout_with_widget(root_layout, window.refresh_btn)
     if isinstance(actions, QBoxLayout):
-        actions.setDirection(QBoxLayout.LeftToRight)
+        actions.setDirection(QBoxLayout.Direction.LeftToRight)
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(7)
 
@@ -237,11 +262,14 @@ def _polish_footer(window) -> None:
         actions.addWidget(window.toggle_console_btn)
         actions.addWidget(window.update_selected_btn)
         actions.addWidget(window.update_all_btn)
-        actions.setAlignment(Qt.AlignVCenter)
+        actions.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
     window.console.setMinimumHeight(130)
     window.console.setMaximumHeight(210)
-    window.console.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    window.console.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Expanding,
+    )
     sync_console_panel(window)
 
     # toggle_console() runs first (it was connected by the legacy UI), then
@@ -254,7 +282,10 @@ def _polish_footer(window) -> None:
 def _polish_status_bar(window) -> None:
     window.status_label.setMinimumWidth(0)
     window.status_label.setMaximumWidth(420)
-    window.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+    window.status_label.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Fixed,
+    )
 
     for name in (
         "release_notice_btn",
