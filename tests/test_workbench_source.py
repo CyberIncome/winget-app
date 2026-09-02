@@ -1,4 +1,4 @@
-"""Source contracts for final interactive workbench behavior."""
+"""Source contracts for interactive workbench behavior."""
 
 from pathlib import Path
 
@@ -6,13 +6,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_canonical_entrypoints_use_workbench_window():
-    main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
-    smoke_source = (ROOT / "scripts" / "smoke_gui.py").read_text(encoding="utf-8")
-    assert "from src.ui.workbench_window import WorkbenchMainWindow" in main_source
-    assert "window = WorkbenchMainWindow()" in main_source
-    assert "from src.ui.workbench_window import WorkbenchMainWindow" in smoke_source
-    assert "window = WorkbenchMainWindow()" in smoke_source
+def test_workbench_remains_below_version_layer():
+    workbench = (ROOT / "src" / "ui" / "workbench_window.py").read_text(
+        encoding="utf-8"
+    )
+    version_aware = (ROOT / "src" / "ui" / "version_aware_window.py").read_text(
+        encoding="utf-8"
+    )
+    assert "class WorkbenchMainWindow(ProductMainWindow)" in workbench
+    assert "class VersionAwareMainWindow(WorkbenchMainWindow)" in version_aware
 
 
 def test_workbench_adds_managed_read_only_package_tools_and_cancel():
@@ -33,7 +35,7 @@ def test_workbench_adds_managed_read_only_package_tools_and_cancel():
     assert '"failed before process start"' in source
 
 
-def test_workers_validate_export_and_bound_show_output():
+def test_workers_validate_and_atomically_publish_export_and_bound_show_output():
     source = (ROOT / "src" / "logic" / "worker_jobs.py").read_text(
         encoding="utf-8"
     )
@@ -42,4 +44,7 @@ def test_workers_validate_export_and_bound_show_output():
     assert "winget_export_worker" in source
     assert "json.loads" in source
     assert "16 * 1024 * 1024" in source
-    assert "created no file" in source
+    assert ".wud-export-" in source
+    assert ".tmp.json" in source
+    assert "os.replace(temporary, destination)" in source
+    assert "require_process_tree_containment=True" in source
