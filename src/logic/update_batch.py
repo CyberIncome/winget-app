@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 
-def package_ref_key(ref: dict) -> tuple[str, str, str]:
+def package_ref_key(ref: dict) -> tuple[str, str, str, str]:
+    """Identify one scan-bound update target, including its exact version."""
     return (
         str(ref.get("match_by") or "").strip().casefold(),
         str(ref.get("value") or "").strip().casefold(),
         str(ref.get("source") or "").strip().casefold(),
+        str(ref.get("version") or "").strip().casefold(),
     )
 
 
@@ -19,8 +21,8 @@ class BatchResultTracker:
             if not key[0] or not key[1]:
                 continue
             self._requested.setdefault(key, dict(ref))
-        self._successes: dict[tuple[str, str, str], dict] = {}
-        self._failures: dict[tuple[str, str, str], dict] = {}
+        self._successes: dict[tuple[str, str, str, str], dict] = {}
+        self._failures: dict[tuple[str, str, str, str], dict] = {}
 
     @property
     def requested_count(self) -> int:
