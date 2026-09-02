@@ -150,7 +150,7 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
-    from src.ui.runtime_window import RuntimeMainWindow
+    from src.ui.experience_window import ExperienceMainWindow
 
     app = QApplication.instance()
     if not app:
@@ -163,19 +163,14 @@ def main():
         with open(qss_path, "r", encoding="utf-8") as file_handle:
             app.setStyleSheet(file_handle.read())
 
-    window = RuntimeMainWindow()
+    window = ExperienceMainWindow()
     window.show()
 
     if "pytest" in sys.modules:
-        # The pytest smoke test must not leave a top-level Qt window or its
-        # GUI logging handler alive for later tests in the same process.
         window.close()
         return 0
 
     if os.getenv("WUD_PACKAGED_SMOKE") == "1":
-        # Private release-verification mode: prove a packaged executable can
-        # construct and cleanly tear down the canonical runtime window without
-        # waiting long enough for its normal 500 ms startup scan to begin.
         QTimer.singleShot(200, window.close)
         QTimer.singleShot(350, app.quit)
 

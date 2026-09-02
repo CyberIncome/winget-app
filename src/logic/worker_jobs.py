@@ -102,3 +102,14 @@ def app_release_worker(
         return check_latest_release(current_version, pat)
 
     _run_worker(result_queue, operation)
+
+
+def diagnostics_worker(result_queue) -> None:
+    """Collect a non-secret support snapshot outside the Qt process."""
+
+    def operation():
+        from src.logic.diagnostics import collect_diagnostics
+
+        return collect_diagnostics()
+
+    _run_worker(result_queue, operation)
