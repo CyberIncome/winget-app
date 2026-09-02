@@ -1,9 +1,13 @@
 """Regression tests for independent, reliable checkbox selection behavior."""
 
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QApplication
+from types import SimpleNamespace
 
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtWidgets import QApplication, QTableView
+
+from src.ui.main_window import CustomSortProxy, UpdateModel
 from src.ui.selection_polish import (
+    _CheckboxColumnFilter,
     apply_selection_polish,
     clear_all_checked,
     set_visible_checked,
@@ -71,8 +75,26 @@ def test_visible_bulk_check_respects_filter_and_clear_is_independent(qtbot):
     assert window.table.selectionModel().hasSelection() is True
 
 
-def test_selection_polish_uses_full_width_checkbox_column(qtbot):
+def test_selection_polish_restores_full_width_after_model_reload(qtbot):
     window = _window(qtbot)
+
+    # Production model loaders replace each proxy source model and historically
+    # resize the checkbox column back to 40 px afterward. Simulate that exact
+    # ordering and confirm the queued selection-polish correction wins.
+    window.proxy_model.setSourceModel(
+        UpdateModel(
+            [{"Name": "Gamma", "Id": "Example.Gamma"}],
+        )
+    )
+    window.inventory_proxy.setSourceModel(
+        UpdateModel(
+            [{"Name": "Gamma", "Id": "Example.Gamma"}],
+            is_inventory=True,
+        )
+    )
+    window.table.setColumnWidth(0, 40)
+    window.inventory_table.setColumnWidth(0, 40)
+    QApplication.processEvents()
 
     assert window.table.columnWidth(0) >= 52
     assert window.inventory_table.columnWidth(0) >= 52
@@ -80,16 +102,22 @@ def test_selection_polish_uses_full_width_checkbox_column(qtbot):
     assert window.clear_checked_btn.text() == "Clear Checked"
 
 
-def test_checkbox_filter_is_safe_during_qt_object_teardown(qtbot):
-    window = _window(qtbot)
-    event_filter = window._checkbox_column_filters[0]
+def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
+    # This table is deliberately *not* registered with qtbot: the test owns its
+    # destruction, so pytest-qt will not later try to close a deleted wrapper.
+    table = QTableView()
+    proxy = CustomSortProxy()
+    table.setModel(proxy)
+    window = SimpleNamespace(table=table)
+    event_filter = _CheckboxColumnFilter(window, table, proxy)
+    table.viewport().installEventFilter(event_filter)
 
-    # Force the same QObject destruction path pytest/Qt runs at interpreter
-    # teardown. The filter must not dereference a deleted QTableView wrapper.
-    window.deleteLater()
+    table.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     QApplication.processEvents()
 
-    # A late teardown event must be an inert no-op even after Qt ownership has
-    # destroyed the table/viewport beneath the retained Python wrapper.
-    assert event_filter.eventFilter(None, QEvent(QEvent.Type.Destroy)) is False
+    # The destroyed signal must sever references before any late event can
+    # dereference a deleted QTableView C++ object.
+    assert event_filter._table is None
+    assert event_filter._proxy is None
+    assert event_filter._window is None
