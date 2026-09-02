@@ -45,7 +45,7 @@ def test_layout_polish_is_geometry_only_not_package_execution_logic():
     source = _source("src/ui/layout_polish.py")
     assert "apply_layout_polish" in source
     assert "QScrollArea" in source
-    assert "QBoxLayout.TopToBottom" in source
+    assert "QBoxLayout.Direction.TopToBottom" in source
     assert "update_splitter.setSizes" in source
     assert "inventory_splitter.setSizes" in source
     assert "executor" not in source
