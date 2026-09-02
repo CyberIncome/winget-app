@@ -23,7 +23,11 @@ def winget_version_map_worker(result_queue) -> None:
                 destination,
                 include_versions=True,
             )
-            result = run_command(command, timeout=180)
+            result = run_command(
+                command,
+                timeout=180,
+                require_process_tree_containment=True,
+            )
             if not result.ok:
                 raise RuntimeError(
                     f"winget export --include-versions {result.failure_summary()}"
@@ -68,7 +72,11 @@ def exact_package_show_worker(package_ref: dict, result_queue) -> None:
             source=ref.get("source"),
             version=ref.get("version"),
         )
-        result = run_command(command, timeout=90)
+        result = run_command(
+            command,
+            timeout=90,
+            require_process_tree_containment=True,
+        )
         if not result.ok:
             raise RuntimeError(f"winget show {result.failure_summary()}")
         return {
