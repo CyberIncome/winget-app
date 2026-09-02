@@ -1,4 +1,4 @@
-"""Windows Job Object containment for cancellable subprocess trees."""
+"""Windows Job Object containment for cancellable process trees."""
 
 from __future__ import annotations
 
@@ -53,34 +53,39 @@ def _windows_error(function_name: str) -> OSError:
     return OSError(code, f"{function_name} failed: {detail}")
 
 
+def _kernel32():
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
 class WindowsKillOnCloseJob:
-    """Own a Job Object whose process tree dies when this handle closes."""
+    """Own a Job Object whose associated process tree dies on handle close."""
 
     def __init__(self, kernel32, handle):
         self._kernel32 = kernel32
         self._handle = handle
 
     @classmethod
-    def attach(cls, process):
-        """Assign an already-started Windows subprocess to a kill-on-close job."""
+    def _attach_handle(cls, process_handle):
         if os.name != "nt":
             return None
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
-        kernel32.SetInformationJobObject.argtypes = [
-            wintypes.HANDLE,
-            ctypes.c_int,
-            ctypes.c_void_p,
-            wintypes.DWORD,
-        ]
-        kernel32.SetInformationJobObject.restype = wintypes.BOOL
-        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
-        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel32.CloseHandle.restype = wintypes.BOOL
-
+        kernel32 = _kernel32()
         job_handle = kernel32.CreateJobObjectW(None, None)
         if not job_handle:
             raise _windows_error("CreateJobObjectW")
@@ -96,13 +101,7 @@ class WindowsKillOnCloseJob:
             ):
                 raise _windows_error("SetInformationJobObject")
 
-            process_handle = getattr(process, "_handle", None)
-            if process_handle is None:
-                raise RuntimeError("subprocess does not expose a Windows process handle")
-            if not kernel32.AssignProcessToJobObject(
-                job_handle,
-                wintypes.HANDLE(int(process_handle)),
-            ):
+            if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
                 raise _windows_error("AssignProcessToJobObject")
         except Exception:
             kernel32.CloseHandle(job_handle)
@@ -110,8 +109,35 @@ class WindowsKillOnCloseJob:
 
         return cls(kernel32, job_handle)
 
+    @classmethod
+    def attach(cls, process):
+        """Assign an already-started Windows subprocess to a kill-on-close job."""
+        if os.name != "nt":
+            return None
+        process_handle = getattr(process, "_handle", None)
+        if process_handle is None:
+            raise RuntimeError("subprocess does not expose a Windows process handle")
+        return cls._attach_handle(wintypes.HANDLE(int(process_handle)))
+
+    @classmethod
+    def attach_current_process(cls):
+        """Contain the current worker before it is allowed to spawn descendants.
+
+        The returned object should remain referenced for the entire worker
+        lifetime. Managed workers intentionally do not explicitly close this
+        handle: the operating system closes it when the worker process exits,
+        and KILL_ON_JOB_CLOSE then terminates any descendants still alive.
+        """
+        if os.name != "nt":
+            return None
+        kernel32 = _kernel32()
+        current_process = kernel32.GetCurrentProcess()
+        if not current_process:
+            raise _windows_error("GetCurrentProcess")
+        return cls._attach_handle(current_process)
+
     def close(self) -> None:
-        """Close the last owned job handle, terminating any lingering descendants."""
+        """Close the last owned job handle, terminating lingering descendants."""
         handle = self._handle
         if not handle:
             return
