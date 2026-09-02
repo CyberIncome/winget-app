@@ -9,6 +9,7 @@ import time
 
 import click
 
+from src.app_info import APP_NAME, get_app_version
 from src.logic.command_runner import CommandResult, run_command
 from src.logic.executor import (
     WingetExecutor,
@@ -94,6 +95,7 @@ def _progress(ctx, text, color="blue"):
 
 
 @click.group()
+@click.version_option(version=get_app_version(), prog_name=APP_NAME)
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging.")
 @click.option(
     "--json-output",
@@ -406,6 +408,77 @@ def status(ctx):
     click.echo(f"  Updates Available: {summary['updates_available']}")
     click.echo(f"  Unknown Versions: {summary['unknown_versions']}")
     click.echo(f"  Time: {summary['timestamp']}")
+
+
+@cli.command()
+@click.pass_context
+def doctor(ctx):
+    """Show non-secret runtime/build diagnostics for support and troubleshooting."""
+    from src.logic.diagnostics import collect_diagnostics
+
+    _progress(ctx, "Collecting diagnostics...")
+    data = collect_diagnostics()
+    if ctx.obj["json"]:
+        output_json(data)
+        return
+
+    app = data["application"]
+    runtime = data["runtime"]
+    winget = data["winget"]
+    settings = data["settings"]
+    click.echo()
+    click.secho("Winget Universal Dashboard diagnostics", fg="cyan", bold=True)
+    click.echo(f"  Version: {app.get('version')}")
+    click.echo(f"  Commit: {app.get('commit') or 'development'}")
+    click.echo(f"  Frozen executable: {app.get('frozen')}")
+    click.echo(f"  Python: {runtime.get('python')}")
+    click.echo(f"  PySide6: {runtime.get('pyside6') or 'not installed'}")
+    click.echo(f"  Platform: {runtime.get('platform')}")
+    click.echo(f"  Architecture: {runtime.get('architecture')}")
+    click.echo(f"  Winget: {winget.get('version') or 'unavailable'}")
+    click.echo(f"  Config directory: {settings.get('config_dir')}")
+    click.echo(
+        "  GitHub PAT configured: "
+        + ("yes" if settings.get("github_pat_configured") else "no")
+    )
+    click.echo(f"  Ignored package updates: {settings.get('ignored_updates_count')}")
+    click.echo("\nNo credential values are included in this diagnostic output.")
+
+
+@cli.command(name="ignored")
+@click.option(
+    "--clear",
+    "clear_ignored",
+    is_flag=True,
+    help="Restore all package updates previously ignored in the GUI.",
+)
+@click.pass_context
+def ignored_updates(ctx, clear_ignored):
+    """List or clear package-update ignore identities."""
+    from src.logic.config import ConfigManager
+
+    config = ConfigManager()
+    values = config.ignored_updates
+    if clear_ignored:
+        config.clear_ignored_updates()
+        payload = {"cleared": len(values), "ignored_updates": []}
+        if ctx.obj["json"]:
+            output_json(payload)
+        else:
+            click.secho(
+                f"Restored {len(values)} ignored package update(s).",
+                fg="green",
+            )
+        return
+
+    if ctx.obj["json"]:
+        output_json({"ignored_updates": values})
+        return
+    click.secho(
+        f"{len(values)} ignored package update(s)", fg="cyan", bold=True
+    )
+    for value in values:
+        click.echo(f"  {value}")
 
 
 def main():
