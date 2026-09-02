@@ -174,6 +174,18 @@ def _wrap_settings_page(window) -> None:
         window.stack.setCurrentIndex(index)
 
 
+def _polish_history_page(window) -> None:
+    history_view = getattr(window, "history_view", None)
+    if history_view is None:
+        return
+    page = history_view.parentWidget()
+    if page is None or page.layout() is None:
+        return
+    page.layout().setContentsMargins(18, 16, 18, 16)
+    page.layout().setSpacing(8)
+    history_view.setMinimumHeight(220)
+
+
 def _polish_footer(window) -> None:
     panel = window.console.parentWidget()
     if panel is None:
@@ -233,11 +245,27 @@ def _polish_footer(window) -> None:
     )
 
 
+def _polish_status_bar(window) -> None:
+    window.status_label.setMinimumWidth(0)
+    window.status_label.setMaximumWidth(420)
+    window.status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    for name in (
+        "release_notice_btn",
+        "cancel_batch_btn",
+        "version_review_btn",
+    ):
+        button = getattr(window, name, None)
+        if isinstance(button, QPushButton):
+            _mark_compact(button)
+            button.setMaximumWidth(210)
+
+
 def sync_console_panel(window) -> None:
     panel = getattr(window, "bottom_action_panel", None)
     if panel is None:
         return
-    if window.console.isVisible():
+    if not window.console.isHidden():
         panel.setMinimumHeight(165)
         panel.setMaximumHeight(260)
     else:
@@ -278,7 +306,9 @@ def apply_layout_polish(window) -> None:
         )
 
     _wrap_settings_page(window)
+    _polish_history_page(window)
     _polish_footer(window)
+    _polish_status_bar(window)
 
     # Re-apply splitter ratios after the first real layout pass; doing this at
     # construction time alone can be ignored while the window is still 0 px.
