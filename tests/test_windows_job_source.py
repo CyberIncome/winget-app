@@ -25,12 +25,14 @@ def test_managed_worker_enters_containment_before_target_execution():
     assert "target=_managed_process_entry" in source
 
 
-def test_managed_winget_workers_also_require_command_level_containment():
+def test_managed_winget_commands_inherit_worker_tree_without_nested_jobs():
     version_workers = (ROOT / "src" / "logic" / "version_workers.py").read_text(
         encoding="utf-8"
     )
     worker_jobs = (ROOT / "src" / "logic" / "worker_jobs.py").read_text(
         encoding="utf-8"
     )
-    assert version_workers.count("require_process_tree_containment=True") >= 2
-    assert worker_jobs.count("require_process_tree_containment=True") >= 2
+    assert "ManagedProcessJob enters a kill-on-close" in version_workers
+    assert "ManagedProcessJob enters a kill-on-close" in worker_jobs
+    assert "require_process_tree_containment=True" not in version_workers
+    assert "require_process_tree_containment=True" not in worker_jobs
