@@ -30,13 +30,28 @@ def test_history_skips_corrupt_or_oversized_records(tmp_path, monkeypatch):
     path.write_bytes(
         b'{"type":"ok","data":{}}\n'
         + b"not-json\n"
-        + (b"x" * (256 * 1024 + 1))
+        + (b"x" * (history.MAX_EVENT_BYTES + 1))
         + b"\n"
         + b'{"type":"also-ok","data":{}}\n'
     )
 
     events = history.load_history(10)
     assert [event["type"] for event in events] == ["ok", "also-ok"]
+
+
+def test_record_event_never_writes_a_record_larger_than_reader_limit(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "activity-history.jsonl"
+    _use_history_file(monkeypatch, path)
+    giant = {f"key-{index}": "x" * 4000 for index in range(200)}
+
+    event = history.record_event("giant", giant)
+    raw = path.read_bytes().rstrip(b"\n")
+
+    assert len(raw) <= history.MAX_EVENT_BYTES
+    assert event["data"]["truncated"] is True
+    assert history.load_history(1)[0]["type"] == "giant"
 
 
 def test_history_clear_returns_removed_count(tmp_path, monkeypatch):
