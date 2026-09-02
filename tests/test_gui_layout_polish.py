@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QApplication, QBoxLayout, QScrollArea
 
-from src.ui.layout_polish import apply_layout_polish
+from src.ui.layout_polish import apply_layout_polish, sync_console_panel
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
 
@@ -65,6 +65,21 @@ def test_footer_is_one_action_row_when_console_hidden(qtbot):
     ] == [False, False, False, False, False]
 
 
+def test_console_expands_footer_only_while_visible(qtbot):
+    window = _polished_window(qtbot)
+    panel = window.bottom_action_panel
+
+    window.console.show()
+    sync_console_panel(window)
+    assert panel.minimumHeight() >= 160
+    assert panel.maximumHeight() <= 260
+
+    window.console.hide()
+    sync_console_panel(window)
+    assert panel.minimumHeight() == 0
+    assert panel.maximumHeight() <= 60
+
+
 def test_settings_page_is_scrollable_after_feature_layers_expand_it(qtbot):
     window = _polished_window(qtbot)
 
@@ -72,6 +87,19 @@ def test_settings_page_is_scrollable_after_feature_layers_expand_it(qtbot):
     assert window.settings_scroll.widget() is window.settings_tab
     assert window.stack.widget(2) is window.settings_scroll
     assert window.settings_scroll.widgetResizable() is True
+
+
+def test_sidebar_navigation_indices_survive_settings_wrapper(qtbot):
+    window = _polished_window(qtbot)
+
+    window.sidebar.setCurrentRow(2)
+    assert window.stack.currentWidget() is window.settings_scroll
+
+    window.sidebar.setCurrentRow(3)
+    assert window.stack.currentWidget() is window.history_view.parentWidget()
+
+    window.sidebar.setCurrentRow(0)
+    assert window.stack.currentWidget() is window.update_tab
 
 
 def test_header_and_navigation_no_longer_force_excess_width(qtbot):
