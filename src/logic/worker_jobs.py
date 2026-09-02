@@ -159,7 +159,7 @@ def winget_export_worker(
         destination = Path(output_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(
-            f".{destination.name}.wud-export-{os.getpid()}-{uuid.uuid4().hex}.tmp"
+            f".{destination.name}.wud-export-{os.getpid()}-{uuid.uuid4().hex}.tmp.json"
         )
         try:
             command = WingetExecutor().get_export_cmd(
