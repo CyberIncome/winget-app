@@ -72,3 +72,4 @@ def test_inventory_refresh_is_blocked_while_detective_owns_snapshot(qtbot):
     assert window._managed_jobs["detective"] is sentinel
     assert "Detective" in window.status_label.text()
     assert "inventory" not in window._active_tasks
+    window._managed_jobs.pop("detective")
