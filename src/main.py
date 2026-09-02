@@ -150,7 +150,7 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
-    from src.ui.product_window import ProductMainWindow
+    from src.ui.workbench_window import WorkbenchMainWindow
 
     app = QApplication.instance()
     if not app:
@@ -163,7 +163,7 @@ def main():
         with open(qss_path, "r", encoding="utf-8") as file_handle:
             app.setStyleSheet(file_handle.read())
 
-    window = ProductMainWindow()
+    window = WorkbenchMainWindow()
     window.show()
 
     if "pytest" in sys.modules:

@@ -1,5 +1,6 @@
 """Safe construction of Winget command argument lists."""
 
+from pathlib import Path
 import logging
 import re
 
@@ -70,6 +71,17 @@ def validate_source_name(source_name):
     return value
 
 
+def validate_output_path(output_path):
+    """Validate one explicit absolute output-file path for Winget export."""
+    raw = "" if output_path is None else str(output_path)
+    if not raw or _has_control_character(raw):
+        raise ValueError(f"Invalid output path rejected: {output_path!r}")
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        raise ValueError("Winget export output path must be absolute")
+    return str(path)
+
+
 class WingetExecutor:
     """Generate non-shell Winget command argument lists."""
 
@@ -134,6 +146,37 @@ class WingetExecutor:
             source or "default",
             silent,
         )
+        return cmd
+
+    def get_show_cmd(self, package_ref, match_by="id", source=None):
+        """Return a non-interactive read-only command for package metadata."""
+        if match_by == "id":
+            package_ref = validate_app_id(package_ref)
+            selector = "--id"
+        elif match_by == "name":
+            package_ref = validate_package_name(package_ref)
+            selector = "--name"
+        else:
+            raise ValueError(
+                f"Unsupported winget match field: {match_by!r}"
+            )
+        source = validate_source_name(source)
+        cmd = ["winget", "show", selector, package_ref, "--exact"]
+        if source:
+            cmd.extend(["--source", source])
+        cmd.extend(["--accept-source-agreements", "--disable-interactivity"])
+        return cmd
+
+    def get_export_cmd(self, output_path, *, include_versions=False, source=None):
+        """Return a read-only package-list export command."""
+        destination = validate_output_path(output_path)
+        source = validate_source_name(source)
+        cmd = ["winget", "export", "--output", destination]
+        if include_versions:
+            cmd.append("--include-versions")
+        if source:
+            cmd.extend(["--source", source])
+        cmd.extend(["--accept-source-agreements", "--disable-interactivity"])
         return cmd
 
     def get_update_all_cmd(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create, show, and cleanly close the canonical product window without scans."""
+"""Create, show, and cleanly close the canonical workbench window without scans."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from pathlib import Path
 import sys
 
 
-# Executing ``python scripts/smoke_gui.py`` makes ``scripts`` sys.path[0].
-# Add the repository root explicitly before importing the application package so
-# the smoke gate behaves the same whether it is launched from the repo root or
-# by an absolute script path.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -18,13 +14,13 @@ if str(ROOT) not in sys.path:
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from src.ui.product_window import ProductMainWindow
+from src.ui.workbench_window import WorkbenchMainWindow
 
 
 def main() -> int:
-    """Exercise canonical product Qt construction and shutdown locally."""
+    """Exercise canonical workbench Qt construction and shutdown locally."""
     app = QApplication.instance() or QApplication(sys.argv)
-    window = ProductMainWindow()
+    window = WorkbenchMainWindow()
     window.show()
 
     # MainWindow normally schedules startup after 500 ms. Close before that
@@ -34,7 +30,7 @@ def main() -> int:
     QTimer.singleShot(350, app.quit)
     exit_code = app.exec()
     if not window._is_closing:
-        raise RuntimeError("product window did not execute clean shutdown")
+        raise RuntimeError("workbench window did not execute clean shutdown")
     return exit_code
 
 
