@@ -115,6 +115,11 @@ def _polish_updates_toolbar(window) -> None:
         "Double-click = read-only details. Package installation starts only from "
         "the explicit Update controls."
     )
+    toolbar_layout = toolbar.layout()
+    if toolbar_layout is not None:
+        toolbar_layout.setContentsMargins(10, 4, 10, 4)
+        toolbar_layout.setSpacing(7)
+    _repolish(toolbar)
 
     # The long inline hint was useful while developing the new interaction
     # model, but it competes with actual controls at normal window widths.
@@ -197,6 +202,7 @@ def _polish_footer(window) -> None:
     window.bottom_action_panel = panel
     panel.setObjectName("actionBar")
     panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+    _repolish(panel)
 
     # The historical footer was a horizontal console plus a *vertical* stack
     # of five buttons. That consumed ~200 px even with the console hidden.
