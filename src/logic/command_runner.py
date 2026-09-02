@@ -28,6 +28,7 @@ class CommandResult:
     timed_out: bool = False
     start_error: str | None = None
     output_overflow: bool = False
+    containment_error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -35,6 +36,7 @@ class CommandResult:
             not self.timed_out
             and self.start_error is None
             and not self.output_overflow
+            and self.containment_error is None
             and self.returncode == 0
         )
 
@@ -43,6 +45,8 @@ class CommandResult:
             return f"failed to start: {self.start_error}"
         if self.timed_out:
             return "timed out"
+        if self.containment_error:
+            return f"process-tree containment failed: {self.containment_error}"
         if self.output_overflow:
             return f"output exceeded {MAX_CAPTURE_BYTES} byte safety limit"
         if self.returncode != 0:
@@ -81,13 +85,15 @@ def _stop_timed_out_process(process) -> None:
         pass
 
 
-def _close_containment_job(job) -> None:
+def _close_containment_job(job) -> str | None:
     if job is None:
-        return
+        return None
     try:
         job.close()
     except Exception as exc:
-        logger.warning("Could not close subprocess containment job: %s", exc)
+        logger.error("Could not close subprocess containment job: %s", exc)
+        return str(exc)
+    return None
 
 
 def run_command(
@@ -110,8 +116,8 @@ def run_command(
 
     Managed Windows workers can set ``require_process_tree_containment``. In
     that mode the subprocess is assigned to a kill-on-close Windows Job Object.
-    If containment cannot be established, the subprocess is stopped and the
-    command fails explicitly rather than becoming impossible to cancel safely.
+    If containment cannot be established or cleanly released, the operation
+    fails explicitly rather than becoming impossible to cancel safely.
     """
     normalized = tuple(str(part) for part in command)
     process_environment = os.environ.copy()
@@ -150,8 +156,8 @@ def run_command(
                         ),
                     )
 
+            timed_out = False
             try:
-                timed_out = False
                 try:
                     returncode = process.wait(timeout=timeout)
                 except subprocess.TimeoutExpired:
@@ -159,10 +165,13 @@ def run_command(
                     # Closing the Windows job first terminates descendants as well
                     # as the immediate subprocess; then retain the old bounded
                     # parent-process kill/wait fallback for every platform.
-                    _close_containment_job(containment_job)
+                    containment_error = _close_containment_job(containment_job)
                     containment_job = None
                     _stop_timed_out_process(process)
                     returncode = None
+                else:
+                    containment_error = _close_containment_job(containment_job)
+                    containment_job = None
 
                 stdout, stdout_overflow = _read_capture(
                     stdout_file, MAX_CAPTURE_BYTES
@@ -177,8 +186,10 @@ def run_command(
                     stderr=stderr,
                     timed_out=timed_out,
                     output_overflow=stdout_overflow or stderr_overflow,
+                    containment_error=containment_error,
                 )
             finally:
+                # Idempotent safety net for callback/decoding exceptions.
                 _close_containment_job(containment_job)
     except OSError as exc:
         return CommandResult(
