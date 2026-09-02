@@ -39,6 +39,9 @@ def test_workers_validate_and_atomically_publish_export_and_bound_show_output():
     source = (ROOT / "src" / "logic" / "worker_jobs.py").read_text(
         encoding="utf-8"
     )
+    process_jobs = (ROOT / "src" / "ui" / "process_jobs.py").read_text(
+        encoding="utf-8"
+    )
     assert "package_show_worker" in source
     assert "result.stdout[:256 * 1024]" in source
     assert "winget_export_worker" in source
@@ -47,4 +50,5 @@ def test_workers_validate_and_atomically_publish_export_and_bound_show_output():
     assert ".wud-export-" in source
     assert ".tmp.json" in source
     assert "os.replace(temporary, destination)" in source
-    assert "ManagedProcessJob enters a kill-on-close" in source
+    assert "WindowsKillOnCloseJob.attach_current_process()" in process_jobs
+    assert "target=_managed_process_entry" in process_jobs
