@@ -26,22 +26,23 @@ def _apply_page_context(window, index: int) -> None:
     table_page = index in (0, 1)
     window.search_bar.setVisible(table_page)
     window.update_selected_btn.setVisible(table_page)
-    window.update_all_btn.setVisible(table_page)
+    # Update All always acts on the authoritative Updates table, so showing it
+    # while Inventory is active is misleading even though the command is safe.
+    window.update_all_btn.setVisible(index == 0)
 
     if index == 0:
         window.search_bar.setPlaceholderText("Search updates (Ctrl+F)...")
-        window.update_selected_btn.setToolTip("Update checked/selected update rows")
+        window.update_selected_btn.setToolTip(
+            "Update only explicitly checked update rows; highlight is inspection-only"
+        )
         window.update_all_btn.setToolTip(
             "Update every package proven upgradeable by the current Winget scan"
         )
     elif index == 1:
         window.search_bar.setPlaceholderText("Search inventory (Ctrl+F)...")
         window.update_selected_btn.setToolTip(
-            "Update selected inventory apps only when they map unambiguously to "
-            "current Winget upgrade rows"
-        )
-        window.update_all_btn.setToolTip(
-            "Update every package proven upgradeable by the current Winget scan"
+            "Update only checked inventory apps that map unambiguously to current "
+            "Winget upgrade rows"
         )
 
 
@@ -73,9 +74,6 @@ def build_version_review_dialog(window) -> QDialog:
     dialog.setWindowTitle("Version Mapping Review")
     dialog.resize(920, 600)
     dialog.setMinimumSize(720, 460)
-    # QWidget is transparent in the global theme; give this top-level dialog
-    # an explicit canvas while allowing the normal app stylesheet to style
-    # its child table, labels, scrollbars, and buttons.
     dialog.setStyleSheet(
         "QDialog#versionReviewDialog { background-color: #11131c; }"
         "QPlainTextEdit#versionReviewDetails {"
