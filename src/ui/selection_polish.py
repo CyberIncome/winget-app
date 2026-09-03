@@ -1,9 +1,13 @@
-"""Final checkbox/row-selection interaction normalization for the product UI."""
+"""Final checkbox/row-selection interaction normalization for the product UI.
+
+Rows are for inspection; checkboxes are the explicit package-action selection.
+The two states intentionally do not mirror each other.
+"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QTimer, Qt
+from PySide6.QtWidgets import QPushButton, QTableView
 
 
 _CHECKBOX_COLUMN_WIDTH = 52
@@ -13,8 +17,6 @@ class _CheckboxColumnFilter(QObject):
     """Make the full first-column cell a reliable checkbox hit target."""
 
     def __init__(self, window, table, proxy):
-        # Parent the filter to the viewport it observes so Qt tears the filter
-        # down with that viewport instead of leaving it alive behind the table.
         super().__init__(table.viewport())
         self._window = window
         self._table = table
@@ -22,7 +24,6 @@ class _CheckboxColumnFilter(QObject):
         table.destroyed.connect(self._detach_table)
 
     def _detach_table(self, *_args):
-        """Drop Python references before the wrapped Qt table is destroyed."""
         self._table = None
         self._proxy = None
         self._window = None
@@ -37,15 +38,10 @@ class _CheckboxColumnFilter(QObject):
         try:
             return table.indexAt(position().toPoint())
         except RuntimeError:
-            # PySide may deliver teardown events while the Python wrapper still
-            # exists but its underlying C++ QTableView has already been deleted.
             self._detach_table()
             return None
 
     def eventFilter(self, watched, event):
-        # Teardown sends non-mouse events through installed filters. Check the
-        # event type before touching the QTableView wrapper so interpreter/Qt
-        # shutdown cannot dereference an already-deleted C++ object.
         event_type = event.type()
         if event_type not in {
             QEvent.Type.MouseButtonPress,
@@ -71,8 +67,7 @@ class _CheckboxColumnFilter(QObject):
         if index is None or not index.isValid() or index.column() != 0:
             return False
 
-        # Consume both halves of the click so Qt's default item delegate cannot
-        # also toggle the native indicator after our full-cell toggle.
+        # Consume both halves so Qt's delegate cannot toggle a second time.
         if event_type == QEvent.Type.MouseButtonRelease:
             return True
 
@@ -101,17 +96,28 @@ class _CheckboxColumnFilter(QObject):
                 Qt.ItemDataRole.CheckStateRole,
             )
 
-        refresh = (
-            getattr(window, "_refresh_update_filter_summary", None)
-            if window is not None
-            else None
-        )
-        if (
-            window is not None
-            and table is getattr(window, "table", None)
-            and callable(refresh)
-        ):
-            refresh()
+        # Checkbox action changes the action set, but also moves the single
+        # inspection highlight/details to the row the user just interacted with.
+        # It never changes any other row's checkbox state.
+        selection_model = table.selectionModel()
+        if selection_model is not None:
+            selection_model.setCurrentIndex(
+                index,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+
+        if window is not None:
+            pane = (
+                getattr(window, "update_details", None)
+                if table is getattr(window, "table", None)
+                else getattr(window, "inventory_details", None)
+            )
+            if pane is not None:
+                _refresh_detail_from_selection(window, table, proxy, pane)
+            refresh = getattr(window, "_refresh_update_filter_summary", None)
+            if table is getattr(window, "table", None) and callable(refresh):
+                refresh()
         return True
 
 
@@ -121,7 +127,6 @@ def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
     try:
         window.update_detail_pane(table, proxy, pane)
     except RuntimeError:
-        # Selection signals can be drained while Qt is destroying the window.
         return
 
 
@@ -133,24 +138,22 @@ def _enforce_checkbox_column_width(table) -> None:
         if table.model() is not None and table.model().columnCount() > 0:
             table.setColumnWidth(0, _CHECKBOX_COLUMN_WIDTH)
     except RuntimeError:
-        # A queued width refresh may drain during Qt teardown.
         return
 
 
 def _schedule_checkbox_column_width(table) -> None:
-    """Run after model loaders finish their own column sizing."""
     QTimer.singleShot(0, lambda: _enforce_checkbox_column_width(table))
 
 
 def _decouple_row_selection(window, table, proxy, pane) -> None:
-    """Keep row highlighting for inspection separate from action checkboxes."""
+    """Make row highlighting a single inspection cursor, not an action set."""
+    table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+    table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+
     selection_model = table.selectionModel()
     if selection_model is not None:
         try:
-            # The historical presentation connected selectionChanged to a
-            # bidirectional checkbox mirror. It is the only selectionChanged
-            # connection on these tables and makes ExtendedSelection erase
-            # previously checked rows on an ordinary click.
+            # Remove the historical bidirectional checkbox mirror.
             selection_model.selectionChanged.disconnect()
         except (RuntimeError, TypeError):
             pass
@@ -161,16 +164,79 @@ def _decouple_row_selection(window, table, proxy, pane) -> None:
         )
 
     _enforce_checkbox_column_width(table)
-    # Both production model loaders replace the proxy source model and then do
-    # their own sizing, historically resetting column 0 to 40 px. Queue our
-    # final sizing for the next event-loop turn so the reliable hit target wins.
-    proxy.sourceModelChanged.connect(
-        lambda: _schedule_checkbox_column_width(table)
-    )
+    proxy.sourceModelChanged.connect(lambda: _schedule_checkbox_column_width(table))
 
     event_filter = _CheckboxColumnFilter(window, table, proxy)
     table.viewport().installEventFilter(event_filter)
     window._checkbox_column_filters.append(event_filter)
+
+
+def _independent_native_checkbox(window, table, proxy, source_row, checked) -> None:
+    """Handle keyboard/native checkbox toggles without touching row selection."""
+    if table is getattr(window, "table", None):
+        refresh = getattr(window, "_refresh_update_filter_summary", None)
+        if callable(refresh):
+            refresh()
+
+
+def _checked_source_items(window, table, proxy) -> list[dict]:
+    model = proxy.sourceModel() if proxy is not None else None
+    if model is None:
+        return []
+    return [
+        item
+        for item in getattr(model, "_data", [])
+        if bool(
+            getattr(model, "_selected", {}).get(
+                window._selection_key(model, item),
+                False,
+            )
+        )
+    ]
+
+
+def update_checked(window) -> None:
+    """Update only explicit checkbox selections; highlights are inspection-only."""
+    on_updates = window.sidebar.currentRow() == 0
+    proxy = window.proxy_model if on_updates else window.inventory_proxy
+    table = window.table if on_updates else window.inventory_table
+    selected_items = _checked_source_items(window, table, proxy)
+    if not selected_items:
+        window.status_label.setText("Check one or more packages to update")
+        window.logger.info("Update Checked clicked with no checked packages.")
+        return
+
+    if on_updates:
+        refs = []
+        seen = set()
+        for item in selected_items:
+            if not window._is_winget_update_item(item):
+                continue
+            ref = window._package_ref_for_winget_item(item)
+            if ref is None:
+                continue
+            key = window._package_ref_key(ref)
+            if key not in seen:
+                refs.append(ref)
+                seen.add(key)
+    else:
+        refs = window._winget_refs_for_inventory_items(selected_items)
+
+    if refs:
+        window.logger.info(
+            "User requested update for %d explicitly checked Winget-proven app(s).",
+            len(refs),
+        )
+        window.batch_update(refs)
+        return
+
+    message = (
+        "Checked app(s) are not present in the current authoritative Winget "
+        "upgrade scan; no update command was run."
+    )
+    window.status_label.setText(message)
+    window.logger.warning(message)
+    window.append_log(f"\n[!] {message}")
 
 
 def set_visible_checked(window, checked: bool) -> int:
@@ -196,7 +262,7 @@ def set_visible_checked(window, checked: bool) -> int:
 
 
 def clear_all_checked(window) -> int:
-    """Clear all Updates checkboxes without disturbing row inspection selection."""
+    """Clear all Updates checkboxes without disturbing inspection highlight."""
     model = window.proxy_model.sourceModel()
     if model is None:
         return 0
@@ -245,13 +311,30 @@ def _rewire_bulk_checkbox_controls(window) -> None:
         clear_button.clicked.connect(lambda: clear_all_checked(window))
         window.clear_checked_btn = clear_button
 
+    try:
+        window.update_selected_btn.clicked.disconnect()
+    except (RuntimeError, TypeError):
+        pass
+    window.update_selected_btn.setText("Update Checked")
+    window.update_selected_btn.setToolTip(
+        "Update only explicitly checked packages; row highlight is inspection-only"
+    )
+    window.update_selected_btn.clicked.connect(lambda: update_checked(window))
+
 
 def apply_selection_polish(window) -> None:
-    """Install reliable independent checkbox interaction after all UI layers exist."""
+    """Install independent checklist + single-row inspection behavior."""
     if getattr(window, "_selection_polished", False):
         return
     window._selection_polished = True
     window._checkbox_column_filters = []
+
+    # Existing model signals call self.handle_native_checkbox dynamically. Point
+    # that callback at the independent policy so keyboard toggles cannot revive
+    # the legacy checkbox<->row-selection mirroring behavior.
+    window.handle_native_checkbox = lambda table, proxy, row, checked: (
+        _independent_native_checkbox(window, table, proxy, row, checked)
+    )
 
     _decouple_row_selection(
         window,
