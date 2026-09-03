@@ -154,6 +154,7 @@ def main():
     from src.ui.layout_polish import apply_layout_polish
     from src.ui.selection_polish import apply_selection_polish
     from src.ui.startup_optimized_window import StartupOptimizedMainWindow
+    from src.ui.update_progress import apply_update_progress
 
     app = QApplication.instance()
     if not app:
@@ -169,6 +170,7 @@ def main():
     window = StartupOptimizedMainWindow()
     apply_layout_polish(window)
     apply_context_polish(window)
+    apply_update_progress(window)
     apply_selection_polish(window)
     window.show()
     logger.info(
