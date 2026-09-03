@@ -2,94 +2,33 @@
 
 Rows and checkboxes represent the same action set. Qt's native ExtendedSelection
 engine owns every mouse click, including clicks over the checkbox column. The
-checkboxes are only a visual mirror of selected rows; they do not implement a
+checkboxes are display-only mirrors of selected rows; they do not implement a
 second mouse-selection path.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import (
-    QEvent,
-    QItemSelection,
-    QItemSelectionModel,
-    QObject,
-    QTimer,
-    Qt,
-)
-from PySide6.QtWidgets import QPushButton, QTableView
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QTimer, Qt
+from PySide6.QtWidgets import QPushButton, QStyledItemDelegate, QTableView
 
 
 _CHECKBOX_COLUMN_WIDTH = 52
 
 
-class _CheckboxColumnFilter(QObject):
-    """Prevent the item delegate from toggling checks independently of rows.
+class _SelectionMirrorDelegate(QStyledItemDelegate):
+    """Render checkbox state without letting the delegate toggle it directly.
 
-    Mouse press is deliberately passed through untouched so QTableView applies
-    its native plain/Ctrl/Shift ExtendedSelection behavior. Release and double
-    click over column zero are consumed before the checkable-item delegate can
-    perform a second, independent checkbox toggle.
+    QTableView must receive the complete mouse press/release sequence so its
+    native ExtendedSelection implementation can apply plain, Ctrl, and Shift
+    semantics correctly. Returning ``False`` for editor events in column zero
+    keeps the check indicator visible while making it non-interactive; the
+    selectionChanged signal is the sole writer of checkbox state.
     """
 
-    def __init__(self, window, table):
-        super().__init__(table.viewport())
-        self._window = window
-        self._table = table
-        table.destroyed.connect(self._detach_table)
-
-    def _detach_table(self, *_args):
-        self._table = None
-        self._window = None
-
-    def _index_for_event(self, event):
-        table = self._table
-        if table is None:
-            return None
-        position = getattr(event, "position", None)
-        if position is None:
-            return None
-        try:
-            return table.indexAt(position().toPoint())
-        except RuntimeError:
-            self._detach_table()
-            return None
-
-    def eventFilter(self, watched, event):
-        event_type = event.type()
-        if event_type not in {
-            QEvent.Type.MouseButtonPress,
-            QEvent.Type.MouseButtonRelease,
-            QEvent.Type.MouseButtonDblClick,
-        }:
+    def editorEvent(self, event, model, option, index):
+        if index.isValid() and index.column() == 0:
             return False
-        if event.button() != Qt.MouseButton.LeftButton:
-            return False
-
-        table = self._table
-        if table is None:
-            return False
-        try:
-            if watched is not table.viewport():
-                return False
-        except RuntimeError:
-            self._detach_table()
-            return False
-
-        index = self._index_for_event(event)
-        if index is None or not index.isValid() or index.column() != 0:
-            return False
-
-        if event_type == QEvent.Type.MouseButtonPress:
-            # QTableView must receive this event itself. Its built-in selection
-            # engine supplies the exact Windows-style anchor/Ctrl/Shift rules.
-            return False
-
-        # Selection has already been applied by the press. Do not let the item
-        # delegate toggle CheckStateRole separately on release/double-click.
-        window = self._window
-        if window is not None and event_type == QEvent.Type.MouseButtonRelease:
-            QTimer.singleShot(0, lambda: _resync_table(window, table))
-        return True
+        return super().editorEvent(event, model, option, index)
 
 
 def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
@@ -186,19 +125,6 @@ def _sync_selection_to_checkboxes(window, table, proxy, pane) -> None:
     _refresh_selected_action_state(window)
 
 
-def _resync_table(window, table) -> None:
-    """Reassert visual checks from native row selection after mouse release."""
-    if getattr(window, "_is_closing", False):
-        return
-    try:
-        is_updates = table is window.table
-        proxy = window.proxy_model if is_updates else window.inventory_proxy
-        pane = window.update_details if is_updates else window.inventory_details
-    except RuntimeError:
-        return
-    _sync_selection_to_checkboxes(window, table, proxy, pane)
-
-
 def _wire_table_selection(window, table, proxy, pane) -> None:
     _enforce_table_interaction(table)
     selection_model = table.selectionModel()
@@ -220,15 +146,18 @@ def _wire_table_selection(window, table, proxy, pane) -> None:
         )
     )
 
-    event_filter = _CheckboxColumnFilter(window, table)
-    table.viewport().installEventFilter(event_filter)
-    window._checkbox_column_filters.append(event_filter)
+    # Do not intercept viewport mouse events. Qt needs both press and release to
+    # collapse an existing range on a subsequent plain click. A display-only
+    # delegate prevents the checkbox itself from becoming a competing input.
+    delegate = _SelectionMirrorDelegate(table)
+    table.setItemDelegateForColumn(0, delegate)
+    window._selection_mirror_delegates.append(delegate)
 
 
 def _native_checkbox_to_selection(
     window, table, proxy, source_row, checked
 ) -> None:
-    """Keep non-mouse/keyboard checkbox changes aligned with row selection."""
+    """Keep any programmatic checkbox changes aligned with row selection."""
     model = proxy.sourceModel()
     selection_model = table.selectionModel()
     if (
@@ -386,6 +315,9 @@ def apply_selection_polish(window) -> None:
     if getattr(window, "_selection_polished", False):
         return
     window._selection_polished = True
+    window._selection_mirror_delegates = []
+    # Retained as an empty compatibility attribute for older diagnostics/tests;
+    # no viewport mouse filter participates in selection anymore.
     window._checkbox_column_filters = []
 
     window.handle_native_checkbox = lambda table, proxy, row, checked: (
