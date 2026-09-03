@@ -1,4 +1,4 @@
-"""Regression coverage for the optimized managed inventory shortcut scan."""
+"""Regression coverage for the bounded managed inventory scan."""
 
 from __future__ import annotations
 
@@ -59,3 +59,90 @@ def test_portable_shortcut_scan_reuses_one_com_shell(monkeypatch):
     assert calls["init"] == 1
     assert calls["uninit"] == 1
     assert len(results) == 6
+
+
+def test_registry_unknown_version_is_not_recursively_guessed(monkeypatch):
+    """Startup must not crawl arbitrary install trees for missing versions."""
+    import src.logic.parser as parser
+
+    monkeypatch.setattr(inventory_scan, "collect_portable_apps", lambda: [])
+
+    def forbidden_file_version(_path):
+        raise AssertionError("registry unknown must not trigger binary probing")
+
+    monkeypatch.setattr(parser, "get_file_version", forbidden_file_version)
+    data = [
+        {
+            "name": "Large App",
+            "subkey": "Large.App",
+            "version": "???",
+            "path": "C:/Huge/Install/Tree",
+            "url": None,
+        }
+    ]
+
+    result = inventory_scan.collect_total_inventory(data)
+
+    assert result[0]["Version"] == "???"
+    assert result[0]["Type"] == "Installed"
+
+
+def test_portable_version_reads_only_the_concrete_shortcut_target(monkeypatch):
+    import src.logic.parser as parser
+
+    monkeypatch.setattr(
+        inventory_scan,
+        "collect_portable_apps",
+        lambda: [
+            {
+                "name": "Portable Tool",
+                "path": "C:/Tools/PortableTool.exe",
+                "folder": "C:/Tools",
+            }
+        ],
+    )
+    calls = []
+    monkeypatch.setattr(
+        parser,
+        "get_file_version",
+        lambda path: calls.append(path) or "2.4.1",
+    )
+    monkeypatch.setattr(
+        inventory_scan,
+        "_extract_nearby_version",
+        lambda _folder: (_ for _ in ()).throw(
+            AssertionError("metadata fallback should not run when exe has a version")
+        ),
+    )
+
+    result = inventory_scan.collect_total_inventory([])
+
+    assert calls == ["C:/Tools/PortableTool.exe"]
+    assert result[0]["Version"] == "2.4.1"
+    assert result[0]["Managed"] == "Local"
+
+
+def test_inventory_profile_exposes_stage_timings(monkeypatch):
+    import src.logic.parser as parser
+
+    monkeypatch.setattr(inventory_scan, "collect_portable_apps", lambda: [])
+    monkeypatch.setattr(parser, "get_file_version", lambda _path: None)
+
+    result, timings = inventory_scan.collect_total_inventory(
+        [
+            {
+                "name": "App",
+                "subkey": "App",
+                "version": "1.0",
+                "path": None,
+                "url": None,
+            }
+        ],
+        include_timings=True,
+    )
+
+    assert result[0]["Version"] == "1.0"
+    assert timings["shortcut_scan_seconds"] >= 0
+    assert timings["assembly_seconds"] >= 0
+    assert timings["total_seconds"] >= 0
+    assert timings["portable_candidates"] == 0
