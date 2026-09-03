@@ -31,6 +31,7 @@ def _window(qtbot, count=25):
             for index in range(count)
         ]
     )
+    window.show()
     QApplication.processEvents()
     return window
 
@@ -43,39 +44,55 @@ def _checked(model, row):
 
 
 def _selected_rows(window):
-    return sorted(index.row() for index in window.table.selectionModel().selectedRows())
+    return sorted(
+        index.row() for index in window.table.selectionModel().selectedRows()
+    )
 
 
-def test_plain_row_selection_checks_only_that_row(qtbot):
+def _click(qtbot, window, row, column=1, modifier=Qt.KeyboardModifier.NoModifier):
+    index = window.proxy_model.index(row, column)
+    window.table.scrollTo(index)
+    QApplication.processEvents()
+    rect = window.table.visualRect(index)
+    assert rect.isValid()
+    qtbot.mouseClick(
+        window.table.viewport(),
+        Qt.MouseButton.LeftButton,
+        modifier=modifier,
+        pos=rect.center(),
+    )
+    QApplication.processEvents()
+
+
+def test_plain_row_click_checks_only_that_row(qtbot):
     window = _window(qtbot)
     model = window.proxy_model.sourceModel()
     assert model is not None
-    assert window.table.selectionMode() == QTableView.SelectionMode.ExtendedSelection
-
-    window.table.selectionModel().select(
-        window.proxy_model.index(4, 0),
-        QItemSelectionModel.SelectionFlag.ClearAndSelect
-        | QItemSelectionModel.SelectionFlag.Rows,
+    assert (
+        window.table.selectionMode()
+        == QTableView.SelectionMode.ExtendedSelection
     )
 
-    assert _selected_rows(window) == [4]
-    assert _checked(model, 4) is True
-    assert _checked(model, 0) is False
+    _click(qtbot, window, 4, column=1)
+    _click(qtbot, window, 7, column=1)
+
+    assert _selected_rows(window) == [7]
+    assert _checked(model, 7) is True
+    assert _checked(model, 4) is False
     assert window.update_selected_btn.text() == "Update Selected (1)"
 
 
-def test_checkbox_cell_plain_and_shift_click_follow_windows_range_semantics(qtbot):
+def test_checkbox_column_uses_native_plain_and_shift_range_selection(qtbot):
     window = _window(qtbot)
     model = window.proxy_model.sourceModel()
-    event_filter = window._checkbox_column_filters[0]
 
-    event_filter._apply_selection(
-        window.proxy_model.index(0, 0),
-        Qt.KeyboardModifier.NoModifier,
-    )
-    event_filter._apply_selection(
-        window.proxy_model.index(19, 0),
-        Qt.KeyboardModifier.ShiftModifier,
+    _click(qtbot, window, 0, column=0)
+    _click(
+        qtbot,
+        window,
+        19,
+        column=0,
+        modifier=Qt.KeyboardModifier.ShiftModifier,
     )
 
     assert _selected_rows(window) == list(range(20))
@@ -84,53 +101,65 @@ def test_checkbox_cell_plain_and_shift_click_follow_windows_range_semantics(qtbo
     assert window.update_selected_btn.text() == "Update Selected (20)"
 
 
-def test_checkbox_cell_ctrl_click_adds_and_removes_individual_rows(qtbot):
+def test_checkbox_column_ctrl_click_adds_and_removes_native_rows(qtbot):
     window = _window(qtbot)
     model = window.proxy_model.sourceModel()
-    event_filter = window._checkbox_column_filters[0]
 
-    event_filter._apply_selection(
-        window.proxy_model.index(4, 0),
-        Qt.KeyboardModifier.NoModifier,
-    )
-    event_filter._apply_selection(
-        window.proxy_model.index(7, 0),
-        Qt.KeyboardModifier.ControlModifier,
+    _click(qtbot, window, 4, column=0)
+    _click(
+        qtbot,
+        window,
+        7,
+        column=0,
+        modifier=Qt.KeyboardModifier.ControlModifier,
     )
     assert _selected_rows(window) == [4, 7]
     assert _checked(model, 4) is True
     assert _checked(model, 7) is True
 
-    event_filter._apply_selection(
-        window.proxy_model.index(4, 0),
-        Qt.KeyboardModifier.ControlModifier,
+    _click(
+        qtbot,
+        window,
+        4,
+        column=0,
+        modifier=Qt.KeyboardModifier.ControlModifier,
     )
     assert _selected_rows(window) == [7]
     assert _checked(model, 4) is False
     assert _checked(model, 7) is True
 
 
-def test_plain_click_after_range_replaces_previous_selection(qtbot):
+def test_plain_checkbox_click_after_range_replaces_previous_selection(qtbot):
     window = _window(qtbot)
     model = window.proxy_model.sourceModel()
-    event_filter = window._checkbox_column_filters[0]
 
-    event_filter._apply_selection(
-        window.proxy_model.index(0, 0),
-        Qt.KeyboardModifier.NoModifier,
+    _click(qtbot, window, 0, column=0)
+    _click(
+        qtbot,
+        window,
+        19,
+        column=0,
+        modifier=Qt.KeyboardModifier.ShiftModifier,
     )
-    event_filter._apply_selection(
-        window.proxy_model.index(19, 0),
-        Qt.KeyboardModifier.ShiftModifier,
-    )
-    event_filter._apply_selection(
-        window.proxy_model.index(9, 0),
-        Qt.KeyboardModifier.NoModifier,
-    )
+    _click(qtbot, window, 9, column=0)
 
     assert _selected_rows(window) == [9]
     assert _checked(model, 9) is True
     assert sum(_checked(model, row) for row in range(25)) == 1
+
+
+def test_row_body_and_checkbox_column_share_one_selection_state(qtbot):
+    window = _window(qtbot)
+    model = window.proxy_model.sourceModel()
+
+    _click(qtbot, window, 2, column=1)
+    assert _selected_rows(window) == [2]
+    assert _checked(model, 2) is True
+
+    _click(qtbot, window, 5, column=0)
+    assert _selected_rows(window) == [5]
+    assert _checked(model, 2) is False
+    assert _checked(model, 5) is True
 
 
 def test_selected_rows_are_update_targets(qtbot, monkeypatch):
@@ -183,8 +212,14 @@ def test_selection_polish_restores_width_and_extended_mode_after_model_reload(qt
     window.inventory_table.setColumnWidth(0, 40)
     QApplication.processEvents()
 
-    assert window.table.selectionMode() == QTableView.SelectionMode.ExtendedSelection
-    assert window.inventory_table.selectionMode() == QTableView.SelectionMode.ExtendedSelection
+    assert (
+        window.table.selectionMode()
+        == QTableView.SelectionMode.ExtendedSelection
+    )
+    assert (
+        window.inventory_table.selectionMode()
+        == QTableView.SelectionMode.ExtendedSelection
+    )
     assert window.table.columnWidth(0) >= 52
     assert window.inventory_table.columnWidth(0) >= 52
     assert window.check_visible_btn.text() == "Select Visible"
@@ -197,7 +232,7 @@ def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
     proxy = CustomSortProxy()
     table.setModel(proxy)
     window = SimpleNamespace(table=table)
-    event_filter = _CheckboxColumnFilter(window, table, proxy)
+    event_filter = _CheckboxColumnFilter(window, table)
     table.viewport().installEventFilter(event_filter)
 
     table.deleteLater()
@@ -205,5 +240,4 @@ def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
     QApplication.processEvents()
 
     assert event_filter._table is None
-    assert event_filter._proxy is None
     assert event_filter._window is None
