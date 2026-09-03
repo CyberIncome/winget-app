@@ -41,6 +41,19 @@ def test_opaque_installer_stage_never_invents_percentage():
     assert "no percentage" in observation.detail.lower()
 
 
+def test_latest_stage_wins_when_one_chunk_contains_download_and_install():
+    observation = observe_winget_update_output(
+        "100 MB / 100 MB\r\n"
+        "Successfully verified installer hash\r\n"
+        "Starting package install...\r\n"
+    )
+
+    assert observation is not None
+    assert observation.stage == "Installing"
+    assert observation.percent is None
+    assert "no percentage" in observation.detail.lower()
+
+
 def test_no_applicable_upgrade_is_not_misclassified_as_resolving():
     observation = observe_winget_update_output("No applicable upgrade found.")
 
@@ -77,7 +90,6 @@ def test_progress_surface_shows_package_stage_and_real_download_percent(qtbot):
     window.process_queue = deque()
 
     _start_package_ui(window)
-    assert window.update_progress_banner.isVisible() is False
     # The parent window is not shown in this unit test; visibility intent is
     # represented by the widget's hidden state rather than isVisible().
     assert window.update_progress_banner.isHidden() is False
