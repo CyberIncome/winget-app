@@ -40,6 +40,27 @@ def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
         return
 
 
+def _repaint_table_viewport(table) -> None:
+    """Repaint the whole visible table after selection/check mirroring settles."""
+    try:
+        table.viewport().update()
+    except RuntimeError:
+        return
+
+
+def _queue_full_selection_repaint(table) -> None:
+    """Repaint after the current selection signal finishes dispatching.
+
+    Mirroring row selection into CheckStateRole emits per-checkbox dataChanged
+    signals synchronously. On Windows/Qt those cell repaints can race the view's
+    deferred full-row selection repaint, leaving only part of a selected row in
+    its final visual state until mouse hover triggers another paint. Queue one
+    viewport-wide update for the next event-loop turn so every visible cell is
+    painted from the settled selection model immediately.
+    """
+    QTimer.singleShot(0, lambda: _repaint_table_viewport(table))
+
+
 def _enforce_table_interaction(table) -> None:
     """Restore Windows-style multi-selection and the large checkbox target."""
     try:
@@ -123,6 +144,7 @@ def _sync_selection_to_checkboxes(window, table, proxy, pane) -> None:
     if table is getattr(window, "table", None) and callable(refresh):
         refresh()
     _refresh_selected_action_state(window)
+    _queue_full_selection_repaint(table)
 
 
 def _wire_table_selection(window, table, proxy, pane) -> None:
