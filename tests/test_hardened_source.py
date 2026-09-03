@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+UPDATE_PROGRESS = ROOT / "src" / "ui" / "update_progress.py"
 STARTUP_OPTIMIZED = ROOT / "src" / "ui" / "startup_optimized_window.py"
 HARDENED = ROOT / "src" / "ui" / "hardened_window.py"
 PRODUCTION = ROOT / "src" / "ui" / "production_window.py"
@@ -38,6 +39,7 @@ def test_managed_job_has_bounded_terminate_and_kill_cleanup():
 
 def test_changed_python_sources_parse_as_ast():
     for path in [
+        UPDATE_PROGRESS,
         STARTUP_OPTIMIZED,
         HARDENED,
         PRODUCTION,
@@ -71,6 +73,7 @@ def test_changed_python_sources_parse_as_ast():
 
 def test_canonical_entrypoint_preserves_runtime_shutdown_boundary_in_chain():
     main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    progress_source = UPDATE_PROGRESS.read_text(encoding="utf-8")
     startup_source = STARTUP_OPTIMIZED.read_text(encoding="utf-8")
     integrity_source = VERSION_INTEGRITY.read_text(encoding="utf-8")
     aware_source = VERSION_AWARE.read_text(encoding="utf-8")
@@ -81,8 +84,10 @@ def test_canonical_entrypoint_preserves_runtime_shutdown_boundary_in_chain():
     production_source = PRODUCTION.read_text(encoding="utf-8")
     hardened_source = HARDENED.read_text(encoding="utf-8")
 
-    assert "from src.ui.startup_optimized_window import StartupOptimizedMainWindow" in main_source
-    assert "window = StartupOptimizedMainWindow()" in main_source
+    assert "from src.ui.update_progress import" in main_source
+    assert "UpdateProgressMainWindow" in main_source
+    assert "window = UpdateProgressMainWindow()" in main_source
+    assert "class UpdateProgressMainWindow(StartupOptimizedMainWindow)" in progress_source
     assert "class StartupOptimizedMainWindow(VersionIntegrityMainWindow)" in startup_source
     assert "class VersionIntegrityMainWindow(VersionAwareMainWindow)" in integrity_source
     assert "class VersionAwareMainWindow(WorkbenchMainWindow)" in aware_source
@@ -106,14 +111,23 @@ def test_smoke_gui_bootstraps_repo_root_before_canonical_app_import():
     source = SMOKE_GUI.read_text(encoding="utf-8")
     root_bootstrap = "ROOT = Path(__file__).resolve().parents[1]"
     path_insert = "sys.path.insert(0, str(ROOT))"
-    app_import = (
-        "from src.ui.startup_optimized_window import StartupOptimizedMainWindow"
-    )
+    app_import = "from src.ui.update_progress import"
 
     assert root_bootstrap in source
     assert path_insert in source
     assert app_import in source
+    assert "UpdateProgressMainWindow" in source
+    assert "window = UpdateProgressMainWindow()" in source
     assert source.index(path_insert) < source.index(app_import)
+
+
+def test_progress_layer_does_not_rewire_qprocess_lifecycle():
+    source = UPDATE_PROGRESS.read_text(encoding="utf-8")
+    assert "process.finished.disconnect" not in source
+    assert "process.finished.connect" not in source
+    assert "process.readyReadStandardOutput.disconnect" not in source
+    assert "process.readyReadStandardError.disconnect" not in source
+    assert "super().process_finished(code, status)" in source
 
 
 def test_failed_start_guard_is_generation_based_not_timer_based():
