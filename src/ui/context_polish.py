@@ -33,7 +33,7 @@ def _apply_page_context(window, index: int) -> None:
     if index == 0:
         window.search_bar.setPlaceholderText("Search updates (Ctrl+F)...")
         window.update_selected_btn.setToolTip(
-            "Update only explicitly checked update rows; highlight is inspection-only"
+            "Update the selected rows; checkboxes mirror the same selection"
         )
         window.update_all_btn.setToolTip(
             "Update every package proven upgradeable by the current Winget scan"
@@ -41,7 +41,7 @@ def _apply_page_context(window, index: int) -> None:
     elif index == 1:
         window.search_bar.setPlaceholderText("Search inventory (Ctrl+F)...")
         window.update_selected_btn.setToolTip(
-            "Update only checked inventory apps that map unambiguously to current "
+            "Update selected inventory apps that map unambiguously to current "
             "Winget upgrade rows"
         )
 
