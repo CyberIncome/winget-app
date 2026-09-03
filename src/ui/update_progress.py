@@ -4,6 +4,10 @@ Winget exposes useful stage and download information, but installers do not
 always report a percentage (especially in silent mode). This layer therefore
 shows real percentages/byte progress when present and explicitly labels opaque
 installer work instead of inventing an overall percentage.
+
+The progress behavior is implemented as a normal window subclass. It never
+disconnects or replaces the core QProcess signal wiring established by the
+hardened window stack.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ from typing import Optional
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
+
+from src.ui.startup_optimized_window import StartupOptimizedMainWindow
 
 
 _PERCENT_RE = re.compile(r"(?<!\d)(100|[1-9]?\d)%")
@@ -78,7 +84,6 @@ def _observe_line(line: str) -> Optional[UpdateProgressObservation]:
         stage = "Installing" if "install" in lowered else "Downloading"
         return UpdateProgressObservation(stage, f"{stage} {value}%", value)
 
-    # Check the most meaningful lifecycle phrases from most-specific to broad.
     if "successfully installed" in lowered or "successfully upgraded" in lowered:
         return UpdateProgressObservation(
             "Finishing", "Package installation completed", 100
@@ -202,7 +207,6 @@ def _install_progress_ui(window) -> None:
 
     layout = window.update_tab.layout()
     if layout is not None:
-        # Layout/context polish install the updates toolbar at index 0.
         layout.insertWidget(1, banner)
     banner.setVisible(False)
 
@@ -214,7 +218,9 @@ def _install_progress_ui(window) -> None:
 
 
 def _set_bar(window, percent: Optional[int]) -> None:
-    bar = window.update_operation_progress
+    bar = getattr(window, "update_operation_progress", None)
+    if bar is None:
+        return
     if percent is None:
         bar.setRange(0, 0)
         bar.setFormat("")
@@ -225,17 +231,19 @@ def _set_bar(window, percent: Optional[int]) -> None:
 
 
 def _refresh_elapsed(window) -> None:
+    if not hasattr(window, "update_progress_detail"):
+        return
     started = getattr(window, "_visible_update_started_at", None)
     if started is None or window.current_operation != "update":
         return
     elapsed = _format_elapsed(time.monotonic() - started)
     base = getattr(window, "_visible_update_detail_base", "Working")
-    window.update_progress_detail.setText(
-        f"{base}  •  elapsed {elapsed}"
-    )
+    window.update_progress_detail.setText(f"{base}  •  elapsed {elapsed}")
 
 
 def _start_package_ui(window) -> None:
+    if not hasattr(window, "update_progress_banner"):
+        return
     ref = getattr(window, "current_package_ref", None)
     if not isinstance(ref, dict):
         return
@@ -255,7 +263,9 @@ def _start_package_ui(window) -> None:
 
 
 def _observe_output(window, raw: str) -> None:
-    if window.current_operation != "update":
+    if window.current_operation != "update" or not hasattr(
+        window, "update_progress_banner"
+    ):
         return
     observation = observe_winget_update_output(raw)
     if observation is None:
@@ -285,12 +295,40 @@ def _finish_update_ui(window, code: int) -> None:
 
 
 def _hide_banner_if_idle(window) -> None:
-    if getattr(window, "current_operation", None) != "update":
-        window.update_progress_banner.setVisible(False)
+    banner = getattr(window, "update_progress_banner", None)
+    if banner is not None and getattr(window, "current_operation", None) != "update":
+        banner.setVisible(False)
+
+
+class UpdateProgressMainWindow(StartupOptimizedMainWindow):
+    """Add update progress through normal virtual dispatch, not signal rewiring."""
+
+    def run_next_update(self):
+        super().run_next_update()
+        if (
+            self.current_operation == "update"
+            and getattr(self, "current_package_ref", None)
+        ):
+            _start_package_ui(self)
+
+    def _handle_process_output(self, stream_name, raw):
+        super()._handle_process_output(stream_name, raw)
+        _observe_output(self, raw)
+
+    def process_finished(self, code, status):
+        was_update = self.current_operation == "update"
+        if was_update:
+            _finish_update_ui(self, int(code))
+        super().process_finished(code, status)
+        if was_update and self.current_operation != "update":
+            timer = getattr(self, "_update_progress_timer", None)
+            if timer is not None:
+                timer.stop()
+            QTimer.singleShot(3500, lambda: _hide_banner_if_idle(self))
 
 
 def apply_update_progress(window) -> None:
-    """Install live update progress without changing update authority/safety."""
+    """Install only the visual surface/timer for UpdateProgressMainWindow."""
     if getattr(window, "_update_progress_polished", False):
         return
     window._update_progress_polished = True
@@ -302,43 +340,3 @@ def apply_update_progress(window) -> None:
     window._update_progress_timer = timer
     window._visible_update_started_at = None
     window._visible_update_detail_base = "Starting Winget update"
-
-    # Preserve the final hardened methods exactly and decorate only their UI
-    # side-effects. No command construction, target selection, retry, watchdog,
-    # or completion authority is reimplemented here.
-    original_run_next = window.run_next_update
-    original_output = window._handle_process_output
-    original_finished = window.process_finished
-
-    def run_next_with_progress():
-        original_run_next()
-        if (
-            window.current_operation == "update"
-            and getattr(window, "current_package_ref", None)
-        ):
-            _start_package_ui(window)
-
-    def output_with_progress(stream_name, raw):
-        original_output(stream_name, raw)
-        _observe_output(window, raw)
-
-    def finished_with_progress(code, status):
-        was_update = window.current_operation == "update"
-        if was_update:
-            _finish_update_ui(window, int(code))
-        original_finished(code, status)
-        if was_update and window.current_operation != "update":
-            timer.stop()
-            QTimer.singleShot(3500, lambda: _hide_banner_if_idle(window))
-
-    window.run_next_update = run_next_with_progress
-    window._handle_process_output = output_with_progress
-    window.process_finished = finished_with_progress
-
-    # QProcess.finished was connected to the bound method during construction;
-    # reconnect it so the wrapper above is the active completion handler.
-    try:
-        window.process.finished.disconnect()
-    except (RuntimeError, TypeError):
-        pass
-    window.process.finished.connect(window.process_finished)
