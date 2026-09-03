@@ -13,13 +13,13 @@ def _source(path: str) -> str:
 def test_final_entrypoint_uses_integrity_window_and_gui_polish():
     main_source = _source("src/main.py")
     smoke_source = _source("scripts/smoke_gui.py")
-    expected_import = "UpdateProgressMainWindow"
+    expected_import = "AuthoritativeUpdatesMainWindow"
     layout_import = "from src.ui.layout_polish import apply_layout_polish"
     context_import = "from src.ui.context_polish import apply_context_polish"
     selection_import = "from src.ui.selection_polish import apply_selection_polish"
     for source in (main_source, smoke_source):
         assert expected_import in source
-        assert "window = UpdateProgressMainWindow()" in source
+        assert "window = AuthoritativeUpdatesMainWindow()" in source
         assert layout_import in source
         assert context_import in source
         assert selection_import in source
@@ -30,6 +30,7 @@ def test_final_entrypoint_uses_integrity_window_and_gui_polish():
 
 
 def test_product_layers_remain_in_order():
+    authoritative = _source("src/ui/authoritative_updates_window.py")
     progress = _source("src/ui/update_progress.py")
     startup = _source("src/ui/startup_optimized_window.py")
     integrity = _source("src/ui/version_integrity_window.py")
@@ -38,6 +39,10 @@ def test_product_layers_remain_in_order():
     product = _source("src/ui/product_window.py")
     experience = _source("src/ui/experience_window.py")
 
+    assert (
+        "class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow)"
+        in authoritative
+    )
     assert "class UpdateProgressMainWindow(StartupOptimizedMainWindow)" in progress
     assert "class StartupOptimizedMainWindow(VersionIntegrityMainWindow)" in startup
     assert "class VersionIntegrityMainWindow(VersionAwareMainWindow)" in integrity
@@ -45,6 +50,19 @@ def test_product_layers_remain_in_order():
     assert "class WorkbenchMainWindow(ProductMainWindow)" in workbench
     assert "class ProductMainWindow(ExperienceMainWindow)" in product
     assert "class ExperienceMainWindow(RuntimeMainWindow)" in experience
+
+
+def test_authoritative_update_layer_separates_winget_count_from_detective_rows():
+    source = _source("src/ui/authoritative_updates_window.py")
+    assert "_authoritative_update_count" in source
+    assert "_detective_rows_snapshot" in source
+    assert "_restore_detective_rows" in source
+    assert 'item.get("UpdateSource") == "detective"' in source
+    assert "self._is_winget_update_item(item)" in source
+    assert "self._sync_authoritative_update_count()" in source
+    assert "get_update_cmd" not in source
+    assert "executor" not in source
+    assert "QProcess" not in source
 
 
 def test_layout_polish_is_geometry_only_not_package_execution_logic():
