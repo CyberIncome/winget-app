@@ -140,6 +140,7 @@ class EpicLegendaryProvider:
                     "Legendary is not installed; Epic integration is optional "
                     "and is never bundled or authenticated automatically"
                 ),
+                requires_opt_in=True,
             )
         version = None
         result = self._runner([executable, "--version"], timeout=15)
@@ -154,6 +155,7 @@ class EpicLegendaryProvider:
             capabilities=(ProviderCapability.DETECT,),
             executable=executable,
             version=version,
+            requires_opt_in=True,
         )
 
     def scan_updates(self) -> ProviderScanResult:
