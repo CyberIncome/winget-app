@@ -99,11 +99,11 @@ QLineEdit#patInput {
     background-color: rgba(18, 20, 31, 0.92);
     border: 1px solid #414868;
     border-radius: 8px;
-    padding: 9px 13px;
+    padding: 8px 11px;
     color: #f4f7ff;
     selection-background-color: #7aa2f7;
     selection-color: #11131c;
-    min-height: 20px;
+    min-height: 18px;
 }
 
 QLineEdit#searchBar:focus,
@@ -122,12 +122,12 @@ QListWidget#sidebar {
     border: none;
     border-right: 1px solid #2b3046;
     outline: none;
-    padding-top: 12px;
+    padding-top: 9px;
 }
 
 QListWidget#sidebar::item {
-    padding: 12px 16px;
-    margin: 4px 12px;
+    padding: 10px 14px;
+    margin: 3px 10px;
     border-radius: 8px;
     color: #a9b3cb;
     font-weight: 650;
@@ -144,10 +144,27 @@ QListWidget#sidebar::item:selected {
     border: 1px solid rgba(122, 162, 247, 0.45);
 }
 
+/* --- Consolidated layout surfaces --- */
+QWidget#updatesToolbar {
+    background-color: rgba(18, 20, 31, 0.52);
+    border: 1px solid #2b3046;
+    border-radius: 8px;
+}
+
+QWidget#actionBar {
+    background-color: rgba(18, 20, 31, 0.72);
+    border-top: 1px solid #2b3046;
+}
+
+QScrollArea#settingsScroll {
+    background-color: transparent;
+    border: none;
+}
+
 /* --- Splitter & Panes --- */
 QSplitter::handle {
     background-color: #2b3046;
-    margin: 8px 8px;
+    margin: 6px 6px;
     width: 2px;
 }
 
@@ -156,7 +173,7 @@ QPlainTextEdit#console {
     background-color: rgba(13, 15, 24, 0.94);
     border: 1px solid #414868;
     border-radius: 10px;
-    padding: 12px;
+    padding: 10px;
     font-family: "Cascadia Code", "Consolas", monospace;
     color: #cdd6f4;
 }
@@ -184,14 +201,12 @@ QTableView {
 }
 
 QTableView::item {
-    padding: 9px 12px;
+    padding: 7px 10px;
     border-bottom: 1px solid rgba(65, 72, 104, 0.30);
 }
 
-QTableView::item:hover {
-    background-color: rgba(122, 162, 247, 0.10);
-}
-
+/* Selection is row-based. Avoid a per-cell hover tint that can make one cell
+   look selected/unselected differently from the rest of its row. */
 QTableView::item:selected {
     background-color: rgba(122, 162, 247, 0.22);
 }
@@ -199,7 +214,7 @@ QTableView::item:selected {
 QHeaderView::section {
     background-color: rgba(36, 40, 59, 0.96);
     color: #aeb8d0;
-    padding: 11px 12px;
+    padding: 9px 10px;
     border: none;
     border-bottom: 1px solid #414868;
     font-weight: 700;
@@ -212,10 +227,16 @@ QPushButton {
     color: #e6e9f2;
     border: 1px solid #414868;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 7px 12px;
     font-weight: 700;
-    font-size: 9.5pt;
-    min-height: 20px;
+    font-size: 9pt;
+    min-height: 18px;
+}
+
+QPushButton[compact="true"] {
+    padding: 5px 9px;
+    font-size: 8.8pt;
+    min-height: 18px;
 }
 
 QPushButton:hover {
@@ -332,6 +353,7 @@ QScrollBar:horizontal {
     border: none;
     background: transparent;
     height: 9px;
+    margin: 0;
 }
 
 QScrollBar::handle:horizontal {

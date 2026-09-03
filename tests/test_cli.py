@@ -63,6 +63,36 @@ def test_specific_update_carries_source_to_exact_command(monkeypatch):
     ]
 
 
+def test_specific_update_can_pin_exact_target_version(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        cli_module,
+        "_run_update_live",
+        lambda command: captured.append(command),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        [
+            "update",
+            "--source",
+            "winget",
+            "--version",
+            "2.4.1",
+            "Vendor.App",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == [
+        WingetExecutor().get_update_cmd(
+            "Vendor.App",
+            source="winget",
+            version="2.4.1",
+        )
+    ]
+
+
 def test_update_all_rejects_source_instead_of_ignoring_it(monkeypatch):
     captured = []
     monkeypatch.setattr(
@@ -77,5 +107,24 @@ def test_update_all_rejects_source_instead_of_ignoring_it(monkeypatch):
     )
 
     assert result.exit_code != 0
-    assert "--source applies only" in result.output
+    assert "apply only" in result.output
+    assert captured == []
+
+
+def test_update_all_rejects_exact_version_instead_of_ignoring_it(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        cli_module,
+        "_run_update_live",
+        lambda command: captured.append(command),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        ["update", "--all", "--version", "2.4.1"],
+    )
+
+    assert result.exit_code != 0
+    assert "--version" in result.output
+    assert "not --all" in result.output
     assert captured == []

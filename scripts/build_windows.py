@@ -9,8 +9,10 @@ from pathlib import Path
 import shutil
 
 from release_common import (
+    BUILD_INFO_FILE,
     CLI_EXE,
     GUI_EXE,
+    VERSION_FILE,
     current_git_commit,
     read_version,
     require_x64_pe,
@@ -84,6 +86,11 @@ def _common_args(name: str, version_file: Path) -> list[str]:
     qss = ROOT / "src" / "ui" / "styles.qss"
     if not qss.is_file():
         raise SystemExit(f"Required stylesheet is missing: {qss}")
+    if not VERSION_FILE.is_file() or not BUILD_INFO_FILE.is_file():
+        raise SystemExit(
+            "VERSION/BUILD_INFO.json must exist before packaging so each one-file "
+            "executable carries its own source identity."
+        )
     SPEC_DIR.mkdir(parents=True, exist_ok=True)
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     return [
@@ -102,6 +109,10 @@ def _common_args(name: str, version_file: Path) -> list[str]:
         str(version_file),
         "--add-data",
         f"{qss}:src/ui",
+        "--add-data",
+        f"{VERSION_FILE}:.",
+        "--add-data",
+        f"{BUILD_INFO_FILE}:.",
         "--collect-submodules",
         "keyring.backends",
         "--copy-metadata",
@@ -110,8 +121,8 @@ def _common_args(name: str, version_file: Path) -> list[str]:
 
 
 def build_gui() -> Path:
-    name = "WingetUniversalDashboard"
-    version_file = _version_file(name, "Winget Universal Dashboard")
+    name = GUI_EXE.stem
+    version_file = _version_file(name, "Winget Universal Dashboard portable GUI")
     _pyinstaller_run(
         [
             *_common_args(name, version_file),
@@ -123,7 +134,7 @@ def build_gui() -> Path:
 
 
 def build_cli() -> Path:
-    name = "WingetUniversalDashboardCLI"
+    name = CLI_EXE.stem
     version_file = _version_file(name, "Winget Universal Dashboard CLI")
     _pyinstaller_run(
         [
@@ -152,9 +163,11 @@ def main() -> int:
         shutil.rmtree(BUILD_DIR, ignore_errors=True)
         shutil.rmtree(DIST_DIR, ignore_errors=True)
 
+    # Write provenance before PyInstaller runs. It remains a public release asset
+    # and is also embedded into each one-file executable for About/diagnostics.
+    write_build_identity(version, commit, dirty=dirty)
     artifacts = [build_gui(), build_cli()]
     require_x64_pe(artifacts)
-    write_build_identity(version, commit, dirty=dirty)
 
     print("Built AMD64 artifacts:")
     for artifact in artifacts:

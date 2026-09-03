@@ -81,6 +81,17 @@ def _require_unused_remote_tag(tag: str) -> None:
         raise SystemExit(f"Could not verify whether remote tag {tag} already exists.")
 
 
+def _release_preamble() -> str:
+    return (
+        "## Download\n\n"
+        "**Most users should download `WingetUniversalDashboard-Setup-x64.exe`.** "
+        "It installs the app normally and includes the CLI.\n\n"
+        "- `WingetUniversalDashboard-Portable-x64.exe` — portable GUI; no installation.\n"
+        "- `WingetUniversalDashboard-CLI-x64.exe` — standalone command-line build.\n"
+        "- `SHA256SUMS.txt` — checksums for release verification.\n\n"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -143,6 +154,8 @@ def main() -> int:
         "--title",
         f"Winget Universal Dashboard {tag}",
         "--generate-notes",
+        "--notes",
+        _release_preamble(),
     ]
     if not args.publish:
         command.append("--draft")

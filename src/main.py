@@ -55,6 +55,15 @@ def _install_crash_hooks(log_file):
                 _FAULT_LOG_STREAM = open(
                     crash_log, "a", encoding="utf-8"
                 )
+                # Keep old crash evidence, but delimit every new process so a
+                # future fatal dump can be tied to the exact session/pid that
+                # produced it instead of being confused with historical stacks.
+                _FAULT_LOG_STREAM.write(
+                    "\n=== SESSION START "
+                    f"id={_SESSION_ID} pid={os.getpid()} "
+                    f"at={time.strftime('%Y-%m-%d %H:%M:%S')} ===\n"
+                )
+                _FAULT_LOG_STREAM.flush()
                 faulthandler.enable(_FAULT_LOG_STREAM, all_threads=True)
                 break
             except OSError:
@@ -150,7 +159,13 @@ def main():
 
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
-    from src.ui.runtime_window import RuntimeMainWindow
+    from src.ui.authoritative_updates_window import (
+        AuthoritativeUpdatesMainWindow,
+    )
+    from src.ui.context_polish import apply_context_polish
+    from src.ui.layout_polish import apply_layout_polish
+    from src.ui.selection_polish import apply_selection_polish
+    from src.ui.update_progress import apply_update_progress
 
     app = QApplication.instance()
     if not app:
@@ -163,21 +178,30 @@ def main():
         with open(qss_path, "r", encoding="utf-8") as file_handle:
             app.setStyleSheet(file_handle.read())
 
-    window = RuntimeMainWindow()
+    window = AuthoritativeUpdatesMainWindow()
+    apply_layout_polish(window)
+    apply_context_polish(window)
+    apply_update_progress(window)
+    apply_selection_polish(window)
     window.show()
+    logger.info(
+        "SESSION WINDOW SHOWN id=%s boot=%.3fs",
+        _SESSION_ID,
+        time.perf_counter() - _BOOT_STARTED_AT,
+    )
 
     if "pytest" in sys.modules:
-        # The pytest smoke test must not leave a top-level Qt window or its
-        # GUI logging handler alive for later tests in the same process.
         window.close()
         return 0
 
     if os.getenv("WUD_PACKAGED_SMOKE") == "1":
-        # Private release-verification mode: prove a packaged executable can
-        # construct and cleanly tear down the canonical runtime window without
-        # waiting long enough for its normal 500 ms startup scan to begin.
         QTimer.singleShot(200, window.close)
         QTimer.singleShot(350, app.quit)
+    else:
+        # The historical presentation keeps a 500 ms fallback timer. The final
+        # startup controller is idempotent, so start sooner after the first UI
+        # turn and let the older callback become a harmless no-op.
+        QTimer.singleShot(100, window.startup_sequence)
 
     exit_code = app.exec()
     logger.info(

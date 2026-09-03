@@ -90,10 +90,7 @@ def _header_layout(header: str) -> tuple[list[int], bool]:
             "Winget upgrade table header did not expose a safe 4/5-column layout"
         )
 
-    starts = [
-        _display_width(stripped[: match.start()])
-        for match in matches
-    ]
+    starts = [_display_width(stripped[: match.start()]) for match in matches]
     if starts != sorted(starts) or len(set(starts)) != len(starts):
         raise WingetParseError("Winget upgrade table columns are out of order")
     return starts, len(matches) == 5
@@ -177,27 +174,39 @@ def _looks_like_localized_summary(line: str) -> bool:
     )
 
 
+def _contains_no_update_marker(lines: list[str]) -> bool:
+    return any(
+        any(marker in line.casefold() for marker in _NO_UPDATE_MARKERS)
+        for line in lines
+    )
+
+
 def parse_upgrade_table(output: str) -> list[dict[str, str]]:
-    """Parse validated rows from localized ``winget upgrade`` output.
+    """Parse only the automatically actionable ``winget upgrade`` table.
 
-    WinGet's labels are localized, but the table remains an ordered four-column
-    layout (Name, Id, Version, Available) with an optional fifth Source column.
-    Column positions are measured in terminal display cells so CJK/full-width
-    text cannot shift Python slicing offsets.
+    WinGet's labels are localized, but the primary table remains an ordered
+    four-column layout (Name, Id, Version, Available) with an optional fifth
+    Source column. Column positions are measured in terminal display cells so
+    CJK/full-width text cannot shift Python slicing offsets.
 
-    Any malformed package row fails the whole parse so partial/truncated output
-    cannot silently hide updates. Empty/whitespace-only output is also an error:
-    only an explicit recognized no-update marker may authoritatively mean zero
-    updates.
+    WinGet can also emit a *secondary* table for packages that require explicit
+    targeting (for example pins or installer-specific constraints). Such rows
+    must never leak into the dashboard's automatic Update All set. In a normal
+    multi-table response the compact count summary terminates parsing of the
+    primary table. If WinGet first reports a recognized no-update condition and
+    then emits a table, the response is contradictory/explicit-target-only and
+    therefore fails closed instead of becoming either zero updates or executable
+    update rows.
+
+    Any malformed primary package row fails the whole parse so partial/truncated
+    output cannot silently hide updates. Empty/whitespace-only output is also an
+    error: only an explicit recognized no-update marker *without a table* may
+    authoritatively mean zero automatic updates.
     """
     if not output or not output.strip():
         raise WingetParseError(
             "Winget upgrade produced empty output without a no-update marker"
         )
-
-    lowered = output.lower()
-    if any(marker in lowered for marker in _NO_UPDATE_MARKERS):
-        return []
 
     lines = _clean_lines(output)
     separator_index = None
@@ -212,9 +221,23 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
         break
 
     if separator_index is None or starts is None:
+        if _contains_no_update_marker(lines):
+            return []
         raise WingetParseError(
             "Winget output did not contain a recognizable upgrade table "
             "or no-update marker"
+        )
+
+    # A current WinGet edge case can print `No installed package found...`
+    # immediately before a second table containing packages that require
+    # explicit targeting. The old global marker check silently returned [];
+    # removing it without this guard would be worse because those constrained
+    # packages could become executable dashboard rows. Treat the combination as
+    # a protocol ambiguity and fail closed.
+    if _contains_no_update_marker(lines[:separator_index]):
+        raise WingetParseError(
+            "Winget reported no automatic upgrades but also emitted an "
+            "upgrade table that may require explicit targeting"
         )
 
     rows: list[dict[str, str]] = []
@@ -228,6 +251,8 @@ def parse_upgrade_table(output: str) -> list[dict[str, str]]:
 
         stripped = line.strip()
         if rows and _looks_like_localized_summary(stripped):
+            # This is also the structural boundary before WinGet's optional
+            # secondary explicit-targeting table. Do not parse beyond it.
             break
         if stripped.startswith(
             ("-", "The following", "Some packages", "Pinning")
@@ -254,11 +279,11 @@ def enrich_upgrade_rows(
 ) -> list[dict[str, str]]:
     """Enrich installed versions without overruling Winget upgrade authority.
 
-    Rows in this function have already been emitted by ``winget upgrade``. The
-    package manager therefore remains authoritative about whether an upgrade is
-    available. Local registry heuristics may replace an ``unknown`` installed
-    version for display, but must never discard a Winget row based on our much
-    simpler numeric version parser.
+    Rows in this function have already been emitted by the primary actionable
+    ``winget upgrade`` table. The package manager therefore remains authoritative
+    about whether an automatic upgrade is available. Local registry heuristics
+    may replace an ``unknown`` installed version for display, but must never
+    discard a Winget row based on our much simpler numeric version parser.
     """
     materialized = [dict(row) for row in rows]
     unknown_rows = [
@@ -294,5 +319,5 @@ def enrich_upgrade_rows(
 def parse_winget_upgrade_strict(
     output: str, reg_data: list[dict] | None = None
 ) -> list[dict[str, str]]:
-    """Parse and enrich a Winget upgrade table with explicit failure semantics."""
+    """Parse and enrich the automatic Winget upgrade table with fail-closed semantics."""
     return enrich_upgrade_rows(parse_upgrade_table(output), reg_data=reg_data)

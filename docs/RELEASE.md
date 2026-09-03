@@ -7,16 +7,20 @@ Winget Universal Dashboard uses a fully local release pipeline. GitHub Actions a
 A complete release produces:
 
 - `dist\WingetUniversalDashboard-Setup-x64.exe` — recommended true AMD64/x64 Windows installer;
-- `dist\WingetUniversalDashboard.exe` — portable GUI executable;
-- `dist\WingetUniversalDashboardCLI.exe` — portable CLI executable;
+- `dist\WingetUniversalDashboard-Portable-x64.exe` — portable GUI executable;
+- `dist\WingetUniversalDashboard-CLI-x64.exe` — standalone command-line executable;
 - `dist\BUILD_INFO.json` — exact source version/commit and clean-tree provenance;
 - `dist\SHA256SUMS.txt` — SHA-256 hashes for the installer, portable executables, and build identity.
+
+For a normal new installation, use **`WingetUniversalDashboard-Setup-x64.exe`**. The portable GUI is intended for users who explicitly do not want an installed application, and the CLI asset is for command-line use.
 
 The installer is built with Inno Setup 7 and installs per-user to:
 
 `%LOCALAPPDATA%\Programs\WingetUniversalDashboard`
 
 It creates a Start Menu shortcut, offers an optional desktop shortcut, includes the CLI executable and build identity, supports upgrade-over-existing-version behavior through a stable `AppId`, and registers a normal Windows uninstaller. User configuration under `%APPDATA%\WingetUniversalDashboard` and credentials stored by Windows keyring are outside the install directory and survive application upgrades/uninstall.
+
+The explicit `-Portable-x64` and `-CLI-x64` names are public release-asset names. Inside an installed application directory the executable names remain `WingetUniversalDashboard.exe` and `WingetUniversalDashboardCLI.exe`.
 
 ## Prerequisites
 
@@ -62,8 +66,8 @@ A complete release requires a **clean** worktree. Installer creation and GitHub 
 `SHA256SUMS.txt` covers:
 
 - `WingetUniversalDashboard-Setup-x64.exe`;
-- `WingetUniversalDashboard.exe`;
-- `WingetUniversalDashboardCLI.exe`;
+- `WingetUniversalDashboard-Portable-x64.exe`;
+- `WingetUniversalDashboard-CLI-x64.exe`;
 - `BUILD_INFO.json`.
 
 The publisher recomputes and verifies those hashes before upload. This prevents stale binaries, a changed installer, or a modified provenance file from being published under a valid tag.

@@ -5,9 +5,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+AUTHORITATIVE_UPDATES = ROOT / "src" / "ui" / "authoritative_updates_window.py"
+UPDATE_PROGRESS = ROOT / "src" / "ui" / "update_progress.py"
+STARTUP_OPTIMIZED = ROOT / "src" / "ui" / "startup_optimized_window.py"
 HARDENED = ROOT / "src" / "ui" / "hardened_window.py"
 PRODUCTION = ROOT / "src" / "ui" / "production_window.py"
 RUNTIME = ROOT / "src" / "ui" / "runtime_window.py"
+EXPERIENCE = ROOT / "src" / "ui" / "experience_window.py"
+PRODUCT = ROOT / "src" / "ui" / "product_window.py"
+WORKBENCH = ROOT / "src" / "ui" / "workbench_window.py"
+VERSION_AWARE = ROOT / "src" / "ui" / "version_aware_window.py"
+VERSION_INTEGRITY = ROOT / "src" / "ui" / "version_integrity_window.py"
 JOBS = ROOT / "src" / "ui" / "process_jobs.py"
 MAIN_SHIM = ROOT / "src" / "ui" / "main_window.py"
 LEGACY = ROOT / "src" / "ui" / "legacy_window.py"
@@ -32,17 +40,32 @@ def test_managed_job_has_bounded_terminate_and_kill_cleanup():
 
 def test_changed_python_sources_parse_as_ast():
     for path in [
+        AUTHORITATIVE_UPDATES,
+        UPDATE_PROGRESS,
+        STARTUP_OPTIMIZED,
         HARDENED,
         PRODUCTION,
         RUNTIME,
+        EXPERIENCE,
+        PRODUCT,
+        WORKBENCH,
+        VERSION_AWARE,
+        VERSION_INTEGRITY,
         JOBS,
         MAIN_SHIM,
         LEGACY,
         PARSER_FACADE,
         LEGACY_PARSER,
+        ROOT / "src" / "ui" / "selection_polish.py",
+        ROOT / "src" / "logic" / "inventory_scan.py",
         ROOT / "src" / "logic" / "worker_jobs.py",
+        ROOT / "src" / "logic" / "version_workers.py",
+        ROOT / "src" / "logic" / "version_provenance.py",
+        ROOT / "src" / "logic" / "windows_job.py",
+        ROOT / "src" / "logic" / "command_runner.py",
         ROOT / "src" / "logic" / "upgrade_parser.py",
         ROOT / "src" / "logic" / "output_decode.py",
+        ROOT / "src" / "cli.py",
         ROOT / "scripts" / "verify_windows.py",
         ROOT / "scripts" / "build_windows.py",
         SMOKE_GUI,
@@ -50,14 +73,34 @@ def test_changed_python_sources_parse_as_ast():
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def test_canonical_entrypoint_uses_runtime_shutdown_owner():
+def test_canonical_entrypoint_preserves_runtime_shutdown_boundary_in_chain():
     main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    authoritative_source = AUTHORITATIVE_UPDATES.read_text(encoding="utf-8")
+    progress_source = UPDATE_PROGRESS.read_text(encoding="utf-8")
+    startup_source = STARTUP_OPTIMIZED.read_text(encoding="utf-8")
+    integrity_source = VERSION_INTEGRITY.read_text(encoding="utf-8")
+    aware_source = VERSION_AWARE.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH.read_text(encoding="utf-8")
+    product_source = PRODUCT.read_text(encoding="utf-8")
+    experience_source = EXPERIENCE.read_text(encoding="utf-8")
     runtime_source = RUNTIME.read_text(encoding="utf-8")
     production_source = PRODUCTION.read_text(encoding="utf-8")
     hardened_source = HARDENED.read_text(encoding="utf-8")
 
-    assert "from src.ui.runtime_window import RuntimeMainWindow" in main_source
-    assert "window = RuntimeMainWindow()" in main_source
+    assert "from src.ui.authoritative_updates_window import" in main_source
+    assert "AuthoritativeUpdatesMainWindow" in main_source
+    assert "window = AuthoritativeUpdatesMainWindow()" in main_source
+    assert (
+        "class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow)"
+        in authoritative_source
+    )
+    assert "class UpdateProgressMainWindow(StartupOptimizedMainWindow)" in progress_source
+    assert "class StartupOptimizedMainWindow(VersionIntegrityMainWindow)" in startup_source
+    assert "class VersionIntegrityMainWindow(VersionAwareMainWindow)" in integrity_source
+    assert "class VersionAwareMainWindow(WorkbenchMainWindow)" in aware_source
+    assert "class WorkbenchMainWindow(ProductMainWindow)" in workbench_source
+    assert "class ProductMainWindow(ExperienceMainWindow)" in product_source
+    assert "class ExperienceMainWindow(RuntimeMainWindow)" in experience_source
     assert "class RuntimeMainWindow(ProductionMainWindow)" in runtime_source
     assert "class ProductionMainWindow(HardenedMainWindow)" in production_source
     assert "class HardenedMainWindow(MainWindow)" in hardened_source
@@ -71,16 +114,27 @@ def test_main_window_direct_execution_routes_to_canonical_main():
     assert "window = MainWindow()" not in source
 
 
-def test_smoke_gui_bootstraps_repo_root_before_app_import():
+def test_smoke_gui_bootstraps_repo_root_before_canonical_app_import():
     source = SMOKE_GUI.read_text(encoding="utf-8")
     root_bootstrap = "ROOT = Path(__file__).resolve().parents[1]"
     path_insert = "sys.path.insert(0, str(ROOT))"
-    app_import = "from src.ui.runtime_window import RuntimeMainWindow"
+    app_import = "from src.ui.authoritative_updates_window import"
 
     assert root_bootstrap in source
     assert path_insert in source
     assert app_import in source
+    assert "AuthoritativeUpdatesMainWindow" in source
+    assert "window = AuthoritativeUpdatesMainWindow()" in source
     assert source.index(path_insert) < source.index(app_import)
+
+
+def test_progress_layer_does_not_rewire_qprocess_lifecycle():
+    source = UPDATE_PROGRESS.read_text(encoding="utf-8")
+    assert "process.finished.disconnect" not in source
+    assert "process.finished.connect" not in source
+    assert "process.readyReadStandardOutput.disconnect" not in source
+    assert "process.readyReadStandardError.disconnect" not in source
+    assert "super().process_finished(code, status)" in source
 
 
 def test_failed_start_guard_is_generation_based_not_timer_based():

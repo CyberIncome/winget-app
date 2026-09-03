@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 import subprocess
 import tempfile
 from typing import Mapping, Sequence
 
 from src.logic.output_decode import decode_process_bytes
+from src.logic.windows_job import WindowsKillOnCloseJob
 
 
 MAX_CAPTURE_BYTES = 5 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,7 @@ class CommandResult:
     timed_out: bool = False
     start_error: str | None = None
     output_overflow: bool = False
+    containment_error: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -32,6 +36,7 @@ class CommandResult:
             not self.timed_out
             and self.start_error is None
             and not self.output_overflow
+            and self.containment_error is None
             and self.returncode == 0
         )
 
@@ -40,6 +45,8 @@ class CommandResult:
             return f"failed to start: {self.start_error}"
         if self.timed_out:
             return "timed out"
+        if self.containment_error:
+            return f"process-tree containment failed: {self.containment_error}"
         if self.output_overflow:
             return f"output exceeded {MAX_CAPTURE_BYTES} byte safety limit"
         if self.returncode != 0:
@@ -78,10 +85,23 @@ def _stop_timed_out_process(process) -> None:
         pass
 
 
+def _close_containment_job(job) -> str | None:
+    if job is None:
+        return None
+    try:
+        job.close()
+    except Exception as exc:
+        logger.error("Could not close subprocess containment job: %s", exc)
+        return str(exc)
+    return None
+
+
 def run_command(
     command: Sequence[str],
     timeout: float = 300,
     environment: Mapping[str, str] | None = None,
+    *,
+    require_process_tree_containment: bool = False,
 ) -> CommandResult:
     """Run a command and return a structured, locale-aware bounded outcome.
 
@@ -93,6 +113,11 @@ def run_command(
     WinGet formats its tabular output using the console width. Force a wide
     ``COLUMNS`` value unless the caller explicitly supplies another one so the
     CLI receives the same non-truncated protocol surface as the GUI.
+
+    Managed Windows workers can set ``require_process_tree_containment``. In
+    that mode the subprocess is assigned to a kill-on-close Windows Job Object.
+    If containment cannot be established or cleanly released, the operation
+    fails explicitly rather than becoming impossible to cancel safely.
     """
     normalized = tuple(str(part) for part in command)
     process_environment = os.environ.copy()
@@ -114,28 +139,58 @@ def run_command(
                 stderr=stderr_file,
                 env=process_environment,
             )
+            containment_job = None
+            if require_process_tree_containment and os.name == "nt":
+                try:
+                    containment_job = WindowsKillOnCloseJob.attach(process)
+                except Exception as exc:
+                    _stop_timed_out_process(process)
+                    return CommandResult(
+                        command=normalized,
+                        returncode=None,
+                        stdout="",
+                        stderr="",
+                        start_error=(
+                            "process-tree containment could not be established: "
+                            f"{exc}"
+                        ),
+                    )
+
             timed_out = False
             try:
-                returncode = process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _stop_timed_out_process(process)
-                returncode = None
+                try:
+                    returncode = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    # Closing the Windows job first terminates descendants as well
+                    # as the immediate subprocess; then retain the old bounded
+                    # parent-process kill/wait fallback for every platform.
+                    containment_error = _close_containment_job(containment_job)
+                    containment_job = None
+                    _stop_timed_out_process(process)
+                    returncode = None
+                else:
+                    containment_error = _close_containment_job(containment_job)
+                    containment_job = None
 
-            stdout, stdout_overflow = _read_capture(
-                stdout_file, MAX_CAPTURE_BYTES
-            )
-            stderr, stderr_overflow = _read_capture(
-                stderr_file, MAX_CAPTURE_BYTES
-            )
-            return CommandResult(
-                command=normalized,
-                returncode=returncode,
-                stdout=stdout,
-                stderr=stderr,
-                timed_out=timed_out,
-                output_overflow=stdout_overflow or stderr_overflow,
-            )
+                stdout, stdout_overflow = _read_capture(
+                    stdout_file, MAX_CAPTURE_BYTES
+                )
+                stderr, stderr_overflow = _read_capture(
+                    stderr_file, MAX_CAPTURE_BYTES
+                )
+                return CommandResult(
+                    command=normalized,
+                    returncode=returncode,
+                    stdout=stdout,
+                    stderr=stderr,
+                    timed_out=timed_out,
+                    output_overflow=stdout_overflow or stderr_overflow,
+                    containment_error=containment_error,
+                )
+            finally:
+                # Idempotent safety net for callback/decoding exceptions.
+                _close_containment_job(containment_job)
     except OSError as exc:
         return CommandResult(
             command=normalized,

@@ -9,6 +9,8 @@ import os
 import threading
 import time
 
+from src.logic.update_policy import normalize_ignored_updates
+
 try:
     import keyring
 except ImportError:
@@ -23,6 +25,9 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULT_CONFIG = {
     "auto_detective": True,
+    "check_app_updates": True,
+    "confirm_updates": True,
+    "ignored_updates": [],
     "url_fallbacks": {
         "gimp": "https://github.com/GNOME/gimp/releases",
     },
@@ -33,8 +38,6 @@ class ConfigManager:
     """Manage persistent settings and the GitHub PAT credential."""
 
     _instance = None
-    # __new__ loads while holding this lock, and load/save can nest. RLock
-    # makes the singleton and file operations share one consistent guard.
     _lock = threading.RLock()
     _config: dict = deepcopy(DEFAULT_CONFIG)
 
@@ -114,11 +117,18 @@ class ConfigManager:
                 merged["url_fallbacks"] = deepcopy(
                     DEFAULT_CONFIG["url_fallbacks"]
                 )
+            merged["ignored_updates"] = normalize_ignored_updates(
+                merged.get("ignored_updates")
+            )
+            merged["auto_detective"] = bool(merged.get("auto_detective", True))
+            merged["check_app_updates"] = bool(
+                merged.get("check_app_updates", True)
+            )
+            merged["confirm_updates"] = bool(
+                merged.get("confirm_updates", True)
+            )
             self._config = merged
 
-            # Only rewrite the original file after the credential store has
-            # accepted the secret. On a migration failure the plaintext file
-            # remains unchanged so the next launch can retry without data loss.
             if migration_complete:
                 self.save()
 
@@ -210,6 +220,42 @@ class ConfigManager:
     @property
     def auto_detective(self):
         return bool(self.get("auto_detective", True))
+
+    @auto_detective.setter
+    def auto_detective(self, value):
+        self.set("auto_detective", bool(value))
+
+    @property
+    def check_app_updates(self):
+        return bool(self.get("check_app_updates", True))
+
+    @check_app_updates.setter
+    def check_app_updates(self, value):
+        self.set("check_app_updates", bool(value))
+
+    @property
+    def confirm_updates(self):
+        return bool(self.get("confirm_updates", True))
+
+    @confirm_updates.setter
+    def confirm_updates(self, value):
+        self.set("confirm_updates", bool(value))
+
+    @property
+    def ignored_updates(self):
+        return normalize_ignored_updates(self.get("ignored_updates", []))
+
+    def ignore_update(self, identity: str) -> bool:
+        normalized = normalize_ignored_updates(
+            [*self.ignored_updates, identity]
+        )
+        if normalized == self.ignored_updates:
+            return False
+        self.set("ignored_updates", normalized)
+        return True
+
+    def clear_ignored_updates(self):
+        self.set("ignored_updates", [])
 
     @property
     def url_fallbacks(self):

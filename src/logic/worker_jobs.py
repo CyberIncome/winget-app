@@ -7,8 +7,13 @@ outside the Qt process and can be terminated deterministically during shutdown.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+import time
 import traceback
 from typing import Any, Callable
+import uuid
 
 
 def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
@@ -26,16 +31,78 @@ def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
         )
 
 
-def inventory_scan_worker(result_queue) -> None:
-    """Collect fresh registry and total inventory data in an isolated process."""
+def inventory_base_scan_worker(result_queue) -> None:
+    """Collect the fast registry-backed inventory base for startup."""
 
     def operation():
-        from src.logic.parser import get_registry_data, get_total_inventory
+        from src.logic.inventory_scan import collect_registry_inventory
+        from src.logic.parser import get_registry_data
 
+        started = time.monotonic()
+        registry_started = time.monotonic()
         reg_data = get_registry_data()
+        registry_seconds = time.monotonic() - registry_started
+        assembly_started = time.monotonic()
+        inventory = collect_registry_inventory(reg_data)
+        assembly_seconds = time.monotonic() - assembly_started
         return {
             "registry": reg_data,
-            "inventory": get_total_inventory(reg_data=reg_data),
+            "inventory": inventory,
+            "timings": {
+                "registry_seconds": round(registry_seconds, 3),
+                "assembly_seconds": round(assembly_seconds, 3),
+                "worker_total_seconds": round(time.monotonic() - started, 3),
+                "registry_items": len(reg_data),
+                "inventory_items": len(inventory),
+            },
+        }
+
+    _run_worker(result_queue, operation)
+
+
+def portable_inventory_worker(existing_names: list[str], result_queue) -> None:
+    """Resolve slow Start Menu/Desktop shortcut inventory after base readiness."""
+
+    def operation():
+        from src.logic.inventory_scan import collect_portable_inventory
+
+        portable, timings = collect_portable_inventory(
+            existing_names,
+            include_timings=True,
+        )
+        return {
+            "inventory": portable,
+            "timings": timings,
+        }
+
+    _run_worker(result_queue, operation)
+
+
+def inventory_scan_worker(result_queue) -> None:
+    """Collect the complete registry + shortcut inventory for explicit refreshes."""
+
+    def operation():
+        from src.logic.inventory_scan import collect_total_inventory
+        from src.logic.parser import get_registry_data
+
+        started = time.monotonic()
+        registry_started = time.monotonic()
+        reg_data = get_registry_data()
+        registry_seconds = time.monotonic() - registry_started
+        inventory, inventory_timings = collect_total_inventory(
+            reg_data,
+            include_timings=True,
+        )
+        return {
+            "registry": reg_data,
+            "inventory": inventory,
+            "timings": {
+                "registry_seconds": round(registry_seconds, 3),
+                **inventory_timings,
+                "worker_total_seconds": round(time.monotonic() - started, 3),
+                "registry_items": len(reg_data),
+                "inventory_items": len(inventory),
+            },
         }
 
     _run_worker(result_queue, operation)
@@ -87,5 +154,108 @@ def github_rate_limit_worker(pat: str, result_queue) -> None:
             "status_code": response.status_code,
             "payload": payload,
         }
+
+    _run_worker(result_queue, operation)
+
+
+def app_release_worker(current_version: str, pat: str, result_queue) -> None:
+    """Check the dashboard's own latest stable GitHub release."""
+
+    def operation():
+        from src.logic.app_release import check_latest_release
+
+        return check_latest_release(current_version, pat)
+
+    _run_worker(result_queue, operation)
+
+
+def diagnostics_worker(result_queue) -> None:
+    """Collect a non-secret support snapshot outside the Qt process."""
+
+    def operation():
+        from src.logic.diagnostics import collect_diagnostics
+
+        return collect_diagnostics()
+
+    _run_worker(result_queue, operation)
+
+
+def package_show_worker(package_ref: dict, result_queue) -> None:
+    """Fetch bounded read-only Winget metadata for one exact package reference."""
+
+    def operation():
+        from src.logic.command_runner import run_command
+        from src.logic.executor import WingetExecutor
+
+        ref = dict(package_ref or {})
+        command = WingetExecutor().get_show_cmd(
+            ref.get("value"),
+            match_by=ref.get("match_by", "id"),
+            source=ref.get("source"),
+        )
+        # ManagedProcessJob enters a kill-on-close Job Object before this target
+        # runs, so any subprocess descendants inherit the cancellable worker tree.
+        result = run_command(command, timeout=90)
+        if not result.ok:
+            raise RuntimeError(f"winget show {result.failure_summary()}")
+        return {
+            "ref": ref,
+            "output": result.stdout[:256 * 1024],
+        }
+
+    _run_worker(result_queue, operation)
+
+
+def winget_export_worker(
+    output_path: str,
+    include_versions: bool,
+    result_queue,
+) -> None:
+    """Create and atomically publish a validated WinGet restore-list JSON export."""
+
+    def operation():
+        from src.logic.command_runner import run_command
+        from src.logic.executor import WingetExecutor
+
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(
+            f".{destination.name}.wud-export-{os.getpid()}-{uuid.uuid4().hex}.tmp.json"
+        )
+        try:
+            command = WingetExecutor().get_export_cmd(
+                temporary,
+                include_versions=bool(include_versions),
+            )
+            result = run_command(command, timeout=180)
+            if not result.ok:
+                raise RuntimeError(f"winget export {result.failure_summary()}")
+            if not temporary.is_file():
+                raise RuntimeError(
+                    "winget export exited successfully but created no temporary file"
+                )
+            size = temporary.stat().st_size
+            if size <= 0 or size > 16 * 1024 * 1024:
+                raise RuntimeError(
+                    f"winget export produced an invalid file size: {size} bytes"
+                )
+            try:
+                payload = json.loads(temporary.read_text(encoding="utf-8-sig"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("winget export did not produce valid JSON") from exc
+            if not isinstance(payload, dict):
+                raise RuntimeError("winget export JSON root was not an object")
+
+            os.replace(temporary, destination)
+            return {
+                "path": str(destination),
+                "size": size,
+                "include_versions": bool(include_versions),
+            }
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     _run_worker(result_queue, operation)

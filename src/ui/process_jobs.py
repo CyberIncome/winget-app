@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+import traceback
 from multiprocessing import get_context
 from queue import Empty
 from typing import Callable
@@ -12,6 +14,38 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 
 _PROCESS_STATE_ERRORS = (AssertionError, AttributeError, OSError, ValueError)
+_WORKER_CONTAINMENT_JOB = None
+
+
+def _managed_process_entry(target: Callable, args: tuple, result_queue) -> None:
+    """Enter the Windows containment boundary before executing a worker target.
+
+    Keeping the Job Object in a module-global reference intentionally leaves its
+    handle open for the lifetime of the worker process. If the GUI terminates
+    the worker, Windows closes that handle as part of process teardown and the
+    kill-on-close limit terminates any descendant processes the worker spawned.
+    """
+    global _WORKER_CONTAINMENT_JOB
+    try:
+        if os.name == "nt":
+            from src.logic.windows_job import WindowsKillOnCloseJob
+
+            _WORKER_CONTAINMENT_JOB = WindowsKillOnCloseJob.attach_current_process()
+        target(*args, result_queue)
+    except BaseException as exc:
+        try:
+            result_queue.put(
+                {
+                    "ok": False,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+        except BaseException:
+            # Parent-side polling still detects an abrupt worker exit when even
+            # the error envelope cannot be delivered.
+            pass
 
 
 class ManagedProcessJob(QObject):
@@ -69,8 +103,8 @@ class ManagedProcessJob(QObject):
             self._queue = self._ctx.Queue(maxsize=1)
             self._process = self._ctx.Process(
                 name=f"wud-{self.name}",
-                target=self._target,
-                args=(*self._args, self._queue),
+                target=_managed_process_entry,
+                args=(self._target, self._args, self._queue),
             )
             self._process.start()
             self._started_at = time.monotonic()
@@ -263,7 +297,9 @@ class ManagedProcessJob(QObject):
         and escalation continues rather than escaping into ``closeEvent``.
         An unknown liveness state is treated as possibly alive so cleanup still
         escalates instead of leaving a child behind. PID availability is only
-        diagnostic metadata and never gates cleanup.
+        diagnostic metadata and never gates cleanup. On Windows the spawned
+        worker is itself inside a kill-on-close Job Object before its target is
+        invoked, so terminating the worker also terminates its descendants.
         """
         self._timer.stop()
         process = self._process

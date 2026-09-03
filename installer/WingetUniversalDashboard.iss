@@ -1,5 +1,7 @@
 #define MyAppName "Winget Universal Dashboard"
+#define MyAppSourceName "WingetUniversalDashboard-Portable-x64.exe"
 #define MyAppExeName "WingetUniversalDashboard.exe"
+#define MyCliSourceName "WingetUniversalDashboard-CLI-x64.exe"
 #define MyCliExeName "WingetUniversalDashboardCLI.exe"
 #define MyPublisher "CyberIncome"
 #define MyURL "https://github.com/CyberIncome/winget-app"
@@ -53,8 +55,8 @@ ChangesAssociations=no
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\dist\{#MyCliExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\{#MyAppSourceName}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
+Source: "..\dist\{#MyCliSourceName}"; DestDir: "{app}"; DestName: "{#MyCliExeName}"; Flags: ignoreversion
 Source: "..\dist\BUILD_INFO.json"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
