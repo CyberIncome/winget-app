@@ -57,7 +57,7 @@ def test_same_winget_refresh_preserves_detective_rows_without_changing_count(qtb
         "detective",
     ]
     assert window._stat_updates == 1
-    assert window.stat_updates.value.text() == "1"
+    assert window.stat_updates.value_label.text() == "1"
 
 
 def test_fresh_winget_row_supersedes_matching_detective_row(qtbot):
@@ -127,4 +127,4 @@ def test_successful_winget_row_removal_recounts_without_detective_rows(qtbot):
     assert len(model._data) == 1
     assert model._data[0]["UpdateSource"] == "detective"
     assert window._stat_updates == 0
-    assert window.stat_updates.value.text() == "0"
+    assert window.stat_updates.value_label.text() == "0"
