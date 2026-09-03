@@ -26,6 +26,7 @@ def collect_portable_apps() -> list[dict]:
     import pythoncom
     import win32com.client
 
+    shell = None
     pythoncom.CoInitialize()
     try:
         shell = win32com.client.Dispatch("WScript.Shell")
@@ -73,6 +74,10 @@ def collect_portable_apps() -> list[dict]:
                     )
         return potential_apps
     finally:
+        # Release the COM proxy while the apartment is still initialized. If it
+        # survives beyond CoUninitialize, pywin32 may emit an IUnknown-release
+        # warning during worker teardown.
+        shell = None
         pythoncom.CoUninitialize()
 
 
