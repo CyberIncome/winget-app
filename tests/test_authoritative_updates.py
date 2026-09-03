@@ -31,6 +31,10 @@ def _detective_row(name="Portable Tool", package_id="Portable.Tool"):
     }
 
 
+def _inventory_model(items):
+    return UpdateModel(items, is_inventory=True)
+
+
 def _append_detective(model, item):
     model._data.append(dict(item))
     added = model._data[-1]
@@ -83,7 +87,7 @@ def test_detective_enrichment_does_not_inflate_authoritative_count(qtbot):
     window = _window(qtbot)
     window.apply_winget_results([_winget_row()])
     window.inventory_proxy.setSourceModel(
-        UpdateModel(
+        _inventory_model(
             [
                 {
                     "Name": "Portable Tool",
@@ -93,8 +97,7 @@ def test_detective_enrichment_does_not_inflate_authoritative_count(qtbot):
                     "Type": "Portable",
                     "Managed": "Local",
                 }
-            ],
-            is_inventory=True,
+            ]
         )
     )
 
@@ -105,6 +108,37 @@ def test_detective_enrichment_does_not_inflate_authoritative_count(qtbot):
     assert sum(
         1 for item in model._data if item.get("UpdateSource") == "winget"
     ) == 1
+    assert window._stat_updates == 1
+
+
+def test_new_detective_run_replaces_previous_detective_snapshot(qtbot):
+    window = _window(qtbot)
+    window.apply_winget_results([_winget_row()])
+    model = window.proxy_model.sourceModel()
+    _append_detective(model, _detective_row("Old Tool", "Old.Tool"))
+
+    window.inventory_proxy.setSourceModel(
+        _inventory_model(
+            [
+                {
+                    "Name": "New Tool",
+                    "Id": "New.Tool",
+                    "Version": "4.0",
+                    "Available": "",
+                    "Type": "Portable",
+                    "Managed": "Local",
+                }
+            ]
+        )
+    )
+
+    window._detective_job_succeeded([(0, "5.0")])
+
+    model = window.proxy_model.sourceModel()
+    names = [item["Name"] for item in model._data]
+    assert names == ["Winget App", "New Tool"]
+    assert "Old Tool" not in names
+    assert model._data[1]["UpdateSource"] == "detective"
     assert window._stat_updates == 1
 
 
