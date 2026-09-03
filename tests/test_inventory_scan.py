@@ -61,8 +61,42 @@ def test_portable_shortcut_scan_reuses_one_com_shell(monkeypatch):
     assert len(results) == 6
 
 
+def test_registry_inventory_base_never_enters_shortcut_scan(monkeypatch):
+    monkeypatch.setattr(
+        inventory_scan,
+        "collect_portable_apps",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("fast registry base must not resolve shortcuts")
+        ),
+    )
+    result = inventory_scan.collect_registry_inventory(
+        [
+            {
+                "name": "Fast App",
+                "subkey": "Fast.App",
+                "version": "1.2.3",
+                "path": "C:/Fast",
+                "url": None,
+            }
+        ]
+    )
+
+    assert result == [
+        {
+            "Name": "Fast App",
+            "Id": "Fast.App",
+            "Version": "1.2.3",
+            "Available": "",
+            "Type": "Installed",
+            "Managed": "Windows",
+            "URL": None,
+            "Path": "C:/Fast",
+        }
+    ]
+
+
 def test_registry_unknown_version_is_not_recursively_guessed(monkeypatch):
-    """Startup must not crawl arbitrary install trees for missing versions."""
+    """Inventory must not crawl arbitrary install trees for missing versions."""
     import src.logic.parser as parser
 
     monkeypatch.setattr(inventory_scan, "collect_portable_apps", lambda: [])
@@ -142,6 +176,7 @@ def test_inventory_profile_exposes_stage_timings(monkeypatch):
     )
 
     assert result[0]["Version"] == "1.0"
+    assert timings["base_assembly_seconds"] >= 0
     assert timings["shortcut_scan_seconds"] >= 0
     assert timings["assembly_seconds"] >= 0
     assert timings["total_seconds"] >= 0
