@@ -1,13 +1,11 @@
 """Regression tests for unified, reliable row/checkbox selection behavior."""
 
-from types import SimpleNamespace
-
-from PySide6.QtCore import QEvent, QItemSelectionModel, Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication, QTableView
 
-from src.ui.main_window import CustomSortProxy, UpdateModel
+from src.ui.main_window import UpdateModel
 from src.ui.selection_polish import (
-    _CheckboxColumnFilter,
+    _SelectionMirrorDelegate,
     apply_selection_polish,
     clear_selection,
     select_visible,
@@ -230,17 +228,15 @@ def test_selection_polish_restores_width_and_extended_mode_after_model_reload(qt
     assert window.update_selected_btn.text() == "Update Selected"
 
 
-def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
-    table = QTableView()
-    proxy = CustomSortProxy()
-    table.setModel(proxy)
-    window = SimpleNamespace(table=table)
-    event_filter = _CheckboxColumnFilter(window, table)
-    table.viewport().installEventFilter(event_filter)
+def test_checkbox_column_is_display_only_and_has_no_mouse_filter(qtbot):
+    window = _window(qtbot, count=2)
 
-    table.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    QApplication.processEvents()
-
-    assert event_filter._table is None
-    assert event_filter._window is None
+    assert isinstance(
+        window.table.itemDelegateForColumn(0),
+        _SelectionMirrorDelegate,
+    )
+    assert isinstance(
+        window.inventory_table.itemDelegateForColumn(0),
+        _SelectionMirrorDelegate,
+    )
+    assert window._checkbox_column_filters == []
