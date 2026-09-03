@@ -24,9 +24,11 @@ def _scan_rows(registry, provider_ids: list[str] | None) -> list[dict]:
 def _print_status(rows: list[dict]) -> None:
     for row in rows:
         availability = "ready" if row["available"] else "not available"
+        if row["available"] and row.get("requires_opt_in"):
+            availability = "ready (opt-in)"
         version = f" {row['version']}" if row.get("version") else ""
         print(
-            f"{row['display_name']:<18} {availability:<14} "
+            f"{row['display_name']:<24} {availability:<18} "
             f"{row['mode']:<13}{version}"
         )
         if row.get("reason"):
@@ -45,8 +47,16 @@ def _print_scan(rows: list[dict]) -> None:
             print(f"  ERROR: {result['error']}")
             continue
         updates = result.get("updates") or []
+        warnings = result.get("warnings") or []
         total += len(updates)
-        if not updates:
+        opt_in_skipped = (
+            status.get("requires_opt_in")
+            and not updates
+            and any("explicit opt-in" in warning for warning in warnings)
+        )
+        if opt_in_skipped:
+            print("  not scanned: explicit opt-in required")
+        elif not updates:
             print("  no updates reported")
         for update in updates:
             target = update.get("available_version") or "unknown"
@@ -58,7 +68,7 @@ def _print_scan(rows: list[dict]) -> None:
             )
             if update.get("blocked_reason"):
                 print(f"    {update['blocked_reason']}")
-        for warning in result.get("warnings") or []:
+        for warning in warnings:
             print(f"  warning: {warning}")
     print(f"\nProvider updates reported: {total}")
 
@@ -76,7 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         action="append",
         default=None,
-        help="Provider id to scan. Repeat to select multiple providers.",
+        help=(
+            "Provider id to scan. Repeat to select multiple providers. "
+            "Explicit selection opts into providers that may use an account."
+        ),
     )
     parser.add_argument(
         "--json",
