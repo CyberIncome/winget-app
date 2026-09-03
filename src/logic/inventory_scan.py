@@ -1,10 +1,9 @@
-"""Fast-path system inventory collection for the managed GUI worker.
+"""Bounded system inventory collection for the managed GUI workers.
 
-Startup inventory is deliberately conservative: registry DisplayVersion values
-are trusted when present, and shortcut targets are inspected directly. The old
-implementation recursively walked install directories trying to guess missing
-versions; on large Windows installations that could turn startup into a minute+
-filesystem crawl and could still return the wrong executable/version.
+Registry inventory is intentionally a fast base stage. Start Menu/Desktop
+shortcut resolution is much slower on some Windows machines, so portable-app
+discovery is exposed as a separate enrichment stage instead of blocking the
+initial Inventory table.
 """
 
 from __future__ import annotations
@@ -74,9 +73,6 @@ def collect_portable_apps() -> list[dict]:
                     )
         return potential_apps
     finally:
-        # Release the COM proxy while the apartment is still initialized. If it
-        # survives beyond CoUninitialize, pywin32 may emit an IUnknown-release
-        # warning during worker teardown.
         shell = None
         pythoncom.CoUninitialize()
 
@@ -118,33 +114,14 @@ def _extract_nearby_version(folder: str | None) -> str | None:
     return None
 
 
-def collect_total_inventory(
-    reg_data: list[dict],
-    *,
-    include_timings: bool = False,
-):
-    """Build inventory without recursive per-application filesystem discovery.
-
-    Missing registry versions intentionally remain ``???``. Guessing them by
-    recursively crawling arbitrary install directories was the dominant startup
-    cost on large machines and is less authoritative than the registry value.
-    Portable shortcuts point at a concrete executable, so reading that file's
-    version resource remains a cheap and well-scoped fallback.
-    """
-    from src.logic.parser import get_file_version
-
-    started = time.monotonic()
-    shortcut_started = time.monotonic()
-    portable_leads = collect_portable_apps()
-    shortcut_seconds = time.monotonic() - shortcut_started
-
-    assembly_started = time.monotonic()
+def collect_registry_inventory(reg_data: list[dict]) -> list[dict]:
+    """Convert registry records into the fast authoritative inventory base."""
     inventory = []
     seen_names = set()
-
     for entry in reg_data:
         name = str(entry.get("name") or "").strip()
-        if not name or name.casefold() in seen_names:
+        key = name.casefold()
+        if not name or key in seen_names:
             continue
         version = str(entry.get("version") or "???").strip() or "???"
         inventory.append(
@@ -159,13 +136,34 @@ def collect_total_inventory(
                 "Path": entry.get("path"),
             }
         )
-        seen_names.add(name.casefold())
+        seen_names.add(key)
+    inventory.sort(key=lambda item: item["Name"].casefold())
+    return inventory
 
+
+def collect_portable_inventory(
+    existing_names: set[str] | list[str] | tuple[str, ...] | None = None,
+    *,
+    include_timings: bool = False,
+):
+    """Resolve shortcut-backed portable apps as an optional slow enrichment."""
+    from src.logic.parser import get_file_version
+
+    started = time.monotonic()
+    shortcut_started = time.monotonic()
+    portable_leads = collect_portable_apps()
+    shortcut_seconds = time.monotonic() - shortcut_started
+
+    assembly_started = time.monotonic()
+    seen_names = {str(name).casefold() for name in (existing_names or []) if name}
+    inventory = []
     portable_version_reads = 0
     portable_metadata_reads = 0
+
     for lead in portable_leads:
         name = str(lead.get("name") or "").strip()
-        if not name or name.casefold() in seen_names:
+        key = name.casefold()
+        if not name or key in seen_names:
             continue
         target = str(lead.get("path") or "")
         version = get_file_version(target)
@@ -185,7 +183,7 @@ def collect_total_inventory(
                 "Path": target,
             }
         )
-        seen_names.add(name.casefold())
+        seen_names.add(key)
 
     inventory.sort(key=lambda item: item["Name"].casefold())
     assembly_seconds = time.monotonic() - assembly_started
@@ -194,8 +192,45 @@ def collect_total_inventory(
         "assembly_seconds": round(assembly_seconds, 3),
         "total_seconds": round(time.monotonic() - started, 3),
         "portable_candidates": len(portable_leads),
+        "portable_items": len(inventory),
         "portable_version_reads": portable_version_reads,
         "portable_metadata_reads": portable_metadata_reads,
+    }
+    if include_timings:
+        return inventory, timings
+    return inventory
+
+
+def collect_total_inventory(
+    reg_data: list[dict],
+    *,
+    include_timings: bool = False,
+):
+    """Build the complete inventory for explicit/manual full refreshes."""
+    started = time.monotonic()
+    base_started = time.monotonic()
+    inventory = collect_registry_inventory(reg_data)
+    base_seconds = time.monotonic() - base_started
+    existing_names = {item["Name"] for item in inventory}
+    portable, portable_timings = collect_portable_inventory(
+        existing_names,
+        include_timings=True,
+    )
+    inventory.extend(portable)
+    inventory.sort(key=lambda item: item["Name"].casefold())
+
+    timings = {
+        "base_assembly_seconds": round(base_seconds, 3),
+        "shortcut_scan_seconds": portable_timings["shortcut_scan_seconds"],
+        "assembly_seconds": round(
+            base_seconds + float(portable_timings["assembly_seconds"]),
+            3,
+        ),
+        "total_seconds": round(time.monotonic() - started, 3),
+        "portable_candidates": portable_timings["portable_candidates"],
+        "portable_items": portable_timings["portable_items"],
+        "portable_version_reads": portable_timings["portable_version_reads"],
+        "portable_metadata_reads": portable_timings["portable_metadata_reads"],
     }
     if include_timings:
         return inventory, timings
