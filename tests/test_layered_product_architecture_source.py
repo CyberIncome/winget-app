@@ -74,12 +74,18 @@ def test_selection_polish_owns_unified_row_checkbox_action_dispatch():
     source = _source("src/ui/selection_polish.py")
     assert "apply_selection_polish" in source
     assert "ExtendedSelection" in source
-    assert "ShiftModifier" in source
-    assert "ControlModifier" in source
+    assert "SelectRows" in source
+    assert "_SelectionMirrorDelegate" in source
     assert "Select Visible" in source
     assert "Clear Selection" in source
     assert "Update Selected" in source
     assert "window.batch_update(refs)" in source
+    # Modifier semantics belong to Qt's native ExtendedSelection engine. The
+    # polish layer must not reintroduce a second hand-written mouse-selection
+    # path for Shift/Ctrl/checkbox clicks.
+    assert "eventFilter" not in source
+    assert "MouseButtonPress" not in source
+    assert "MouseButtonRelease" not in source
     # Selection policy may dispatch already-proven refs, but it must never build
     # or execute package commands itself.
     assert "get_update_cmd" not in source
