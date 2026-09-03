@@ -203,3 +203,17 @@ def test_inventory_refresh_is_blocked_while_detective_owns_snapshot(qtbot):
     assert "Detective" in window.status_label.text()
     assert "inventory" not in window._active_tasks
     window._managed_jobs.pop("detective")
+
+
+def test_inventory_refresh_is_blocked_while_portable_enrichment_owns_snapshot(qtbot):
+    window = _window(qtbot)
+    window._startup_stage = "ready"
+    sentinel = object()
+    window._managed_jobs["inventory-portable"] = sentinel
+
+    window.refresh_inventory()
+
+    assert window._managed_jobs["inventory-portable"] is sentinel
+    assert "shortcut" in window.status_label.text().lower()
+    assert "inventory" not in window._active_tasks
+    window._managed_jobs.pop("inventory-portable")
