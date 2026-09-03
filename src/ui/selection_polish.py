@@ -147,14 +147,23 @@ def _enforce_checkbox_column_width(table) -> None:
         return
 
 
-def _schedule_checkbox_column_width(table) -> None:
-    QTimer.singleShot(0, lambda: _enforce_checkbox_column_width(table))
+def _enforce_table_interaction(table) -> None:
+    """Restore the inspection/checklist contract after model replacement."""
+    try:
+        table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+    except RuntimeError:
+        return
+    _enforce_checkbox_column_width(table)
+
+
+def _schedule_table_interaction(table) -> None:
+    QTimer.singleShot(0, lambda: _enforce_table_interaction(table))
 
 
 def _decouple_row_selection(window, table, proxy, pane) -> None:
     """Make row highlighting a single inspection cursor, not an action set."""
-    table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-    table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+    _enforce_table_interaction(table)
 
     selection_model = table.selectionModel()
     if selection_model is not None:
@@ -169,8 +178,10 @@ def _decouple_row_selection(window, table, proxy, pane) -> None:
             )
         )
 
-    _enforce_checkbox_column_width(table)
-    proxy.sourceModelChanged.connect(lambda: _schedule_checkbox_column_width(table))
+    # Production model loaders replace the proxy source model and then restore
+    # legacy ExtendedSelection/40px sizing. Re-apply this interaction contract
+    # after that same event-loop turn so refreshes cannot undo the final policy.
+    proxy.sourceModelChanged.connect(lambda: _schedule_table_interaction(table))
     proxy.sourceModelChanged.connect(
         lambda: QTimer.singleShot(0, lambda: _refresh_checked_action_state(window))
     )
