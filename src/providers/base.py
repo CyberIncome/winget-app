@@ -92,6 +92,7 @@ class ProviderStatus:
     reason: str | None = None
     executable: str | None = None
     version: str | None = None
+    requires_opt_in: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider_id", validate_provider_id(self.provider_id))
@@ -115,6 +116,7 @@ class ProviderStatus:
             "reason": self.reason,
             "executable": self.executable,
             "version": self.version,
+            "requires_opt_in": self.requires_opt_in,
         }
 
 
