@@ -5,6 +5,7 @@ from src.ui.context_polish import (
     build_version_review_dialog,
 )
 from src.ui.layout_polish import apply_layout_polish
+from src.ui.selection_polish import apply_selection_polish
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
 
@@ -13,6 +14,7 @@ def _window(qtbot):
     qtbot.addWidget(window)
     apply_layout_polish(window)
     apply_context_polish(window)
+    apply_selection_polish(window)
     return window
 
 
@@ -30,19 +32,21 @@ def test_table_actions_and_search_hide_on_settings_and_history(qtbot):
     assert window.update_all_btn.isHidden()
 
 
-def test_table_actions_return_on_updates_and_inventory(qtbot):
+def test_updates_and_inventory_expose_only_actions_that_match_page_context(qtbot):
     window = _window(qtbot)
 
     window.sidebar.setCurrentRow(0)
     assert not window.search_bar.isHidden()
     assert not window.update_selected_btn.isHidden()
     assert not window.update_all_btn.isHidden()
+    assert window.update_selected_btn.text() == "Update Checked"
     assert window.search_bar.placeholderText() == "Search updates (Ctrl+F)..."
 
     window.sidebar.setCurrentRow(1)
     assert not window.search_bar.isHidden()
     assert not window.update_selected_btn.isHidden()
-    assert not window.update_all_btn.isHidden()
+    assert window.update_all_btn.isHidden()
+    assert window.update_selected_btn.text() == "Update Checked"
     assert window.search_bar.placeholderText() == "Search inventory (Ctrl+F)..."
 
 
