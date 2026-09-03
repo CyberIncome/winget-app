@@ -19,8 +19,18 @@ from src.providers.base import (
 )
 
 
+def _normalized_distribution_name(value: str) -> str:
+    return str(value or "").replace("_", "-").casefold()
+
+
 def parse_pipx_outdated(text: str) -> tuple[ProviderUpdate, ...]:
-    """Parse ``pipx list --outdated --output=json`` output."""
+    """Parse ``pipx list --outdated --output=json`` output.
+
+    Unsuffixed environments can be targeted exactly through ``pipx install
+    PACKAGE==VERSION --upgrade``. Suffixed/custom environment identities are
+    still reported but fail closed until their suffix metadata is joined from
+    the full pipx environment snapshot.
+    """
     try:
         payload = json.loads(str(text or ""))
     except (TypeError, ValueError) as exc:
@@ -53,6 +63,18 @@ def parse_pipx_outdated(text: str) -> tuple[ProviderUpdate, ...]:
             continue
         seen.add(identity)
         pinned = bool(record.get("pinned"))
+        unsuffixed = _normalized_distribution_name(
+            environment
+        ) == _normalized_distribution_name(package)
+        if pinned:
+            blocked_reason = "pipx environment is pinned"
+        elif not unsuffixed:
+            blocked_reason = (
+                "Exact targeting for suffixed/custom pipx environments is "
+                "not enabled yet"
+            )
+        else:
+            blocked_reason = None
         updates.append(
             ProviderUpdate(
                 provider_id="pipx",
@@ -62,14 +84,15 @@ def parse_pipx_outdated(text: str) -> tuple[ProviderUpdate, ...]:
                 available_version=available,
                 category=ProviderCategory.DEVELOPMENT,
                 mode=ProviderMode.MANAGED,
-                can_update=not pinned,
+                can_update=not pinned and unsuffixed,
                 source="pipx",
-                blocked_reason="pipx environment is pinned" if pinned else None,
+                blocked_reason=blocked_reason,
                 metadata={
                     "environment": environment,
                     "package": package,
                     "injected": bool(record.get("injected")),
                     "pinned": pinned,
+                    "exact_target_supported": unsuffixed,
                 },
             )
         )
@@ -87,7 +110,7 @@ def _result_ok(result: CommandResult) -> bool:
 
 
 class PipxProvider:
-    """Detect and plan exact target upgrades for pipx environments."""
+    """Detect and plan exact target upgrades for supported pipx environments."""
 
     provider_id = "pipx"
 
@@ -176,6 +199,7 @@ class PipxProvider:
                 kind=ActionKind.NONE,
                 description="pipx is no longer available",
             )
+        package_spec = f"{update.name}=={update.available_version}"
         return ProviderAction(
             provider_id=self.provider_id,
             item_id=update.item_id,
@@ -183,12 +207,11 @@ class PipxProvider:
             target_version=update.available_version,
             command=(
                 executable,
-                "upgrade",
-                update.item_id,
-                "--install",
-                "--pip-args",
-                f"{update.name}=={update.available_version}",
+                "install",
+                package_spec,
+                "--upgrade",
+                "--output=json",
             ),
             requires_elevation=False,
-            description="Upgrade exact pipx environment target",
+            description="Upgrade exact pipx package target",
         )
