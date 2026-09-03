@@ -34,5 +34,16 @@ def test_normal_main_arms_optimized_startup_before_legacy_fallback():
     assert "apply_update_progress(window)" in source
 
 
+def test_crash_log_marks_each_process_session_before_faulthandler():
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert '"\\n=== SESSION START "' in source
+    assert "id={_SESSION_ID}" in source
+    assert "pid={os.getpid()}" in source
+    assert "_FAULT_LOG_STREAM.flush()" in source
+    assert source.index("_FAULT_LOG_STREAM.flush()") < source.index(
+        "faulthandler.enable(_FAULT_LOG_STREAM, all_threads=True)"
+    )
+
+
 def test_main_initialization(qtbot):
     assert main() == 0
