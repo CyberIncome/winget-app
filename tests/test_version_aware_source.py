@@ -8,13 +8,36 @@ from src.logic.update_batch import BatchResultTracker
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_canonical_entrypoints_use_version_integrity_window():
+def test_canonical_entrypoints_preserve_version_integrity_in_layered_window_chain():
     main_source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     smoke_source = (ROOT / "scripts" / "smoke_gui.py").read_text(encoding="utf-8")
-    assert "from src.ui.version_integrity_window import VersionIntegrityMainWindow" in main_source
-    assert "window = VersionIntegrityMainWindow()" in main_source
-    assert "from src.ui.version_integrity_window import VersionIntegrityMainWindow" in smoke_source
-    assert "window = VersionIntegrityMainWindow()" in smoke_source
+    authority_source = (
+        ROOT / "src" / "ui" / "authoritative_updates_window.py"
+    ).read_text(encoding="utf-8")
+    progress_source = (ROOT / "src" / "ui" / "update_progress.py").read_text(
+        encoding="utf-8"
+    )
+    startup_source = (
+        ROOT / "src" / "ui" / "startup_optimized_window.py"
+    ).read_text(encoding="utf-8")
+    integrity_source = (
+        ROOT / "src" / "ui" / "version_integrity_window.py"
+    ).read_text(encoding="utf-8")
+
+    for source in (main_source, smoke_source):
+        assert "AuthoritativeUpdatesMainWindow" in source
+        assert "window = AuthoritativeUpdatesMainWindow()" in source
+
+    assert (
+        "class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow)"
+        in authority_source
+    )
+    assert "class UpdateProgressMainWindow(StartupOptimizedMainWindow)" in progress_source
+    assert (
+        "class StartupOptimizedMainWindow(VersionIntegrityMainWindow)"
+        in startup_source
+    )
+    assert "class VersionIntegrityMainWindow(VersionAwareMainWindow)" in integrity_source
 
 
 def test_version_layer_is_above_workbench_and_reconciles_non_blockingly():
