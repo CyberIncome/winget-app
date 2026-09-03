@@ -5,10 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from src.providers.base import (
+    ActionKind,
+    ProviderAction,
     ProviderCategory,
     ProviderMode,
     ProviderScanResult,
     ProviderStatus,
+    ProviderUpdate,
     UpdateProvider,
     validate_provider_id,
 )
@@ -133,3 +136,28 @@ class ProviderRegistry:
             results.append(result)
 
         return tuple(results)
+
+    def plan_update(self, update: ProviderUpdate) -> ProviderAction:
+        """Route one update only to its owning provider and validate the plan."""
+        provider = self.get(update.provider_id)
+        action = provider.plan_update(update)
+        if action.provider_id != update.provider_id:
+            raise ValueError("provider action changed provider ownership")
+        if action.item_id.casefold() != update.item_id.casefold():
+            raise ValueError("provider action changed item identity")
+        if action.kind == ActionKind.COMMAND:
+            if not update.can_update:
+                raise ValueError("provider planned a command for a blocked update")
+            if action.target_version != update.available_version:
+                raise ValueError(
+                    "provider action target does not match scanned target"
+                )
+        elif action.kind == ActionKind.HANDOFF:
+            if update.mode != ProviderMode.HANDOFF:
+                raise ValueError("provider planned handoff for a non-handoff update")
+        elif action.kind == ActionKind.NONE and update.can_update:
+            # Providers may become unavailable between scan and action planning.
+            # NONE is allowed only as an explicit safe failure/handoff denial.
+            if not action.description:
+                raise ValueError("provider declined an executable update silently")
+        return action
