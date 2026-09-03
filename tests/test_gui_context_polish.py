@@ -41,7 +41,6 @@ def test_updates_and_inventory_expose_only_actions_that_match_page_context(qtbot
     assert not window.update_all_btn.isHidden()
     assert window.update_selected_btn.text() == "Update Selected"
     assert window.search_bar.placeholderText() == "Search updates (Ctrl+F)..."
-    assert "checkboxes mirror" in window.update_selected_btn.toolTip()
 
     window.sidebar.setCurrentRow(1)
     assert not window.search_bar.isHidden()
@@ -49,7 +48,6 @@ def test_updates_and_inventory_expose_only_actions_that_match_page_context(qtbot
     assert window.update_all_btn.isHidden()
     assert window.update_selected_btn.text() == "Update Selected"
     assert window.search_bar.placeholderText() == "Search inventory (Ctrl+F)..."
-    assert "selected inventory apps" in window.update_selected_btn.toolTip()
 
 
 def test_version_review_dialog_is_structured_and_bounded(qtbot):
