@@ -17,6 +17,7 @@ from src.providers.base import (
     UpdateProvider,
 )
 from src.providers.registry import ProviderRegistry
+from src.providers.snapshot import ProviderSnapshot
 
 __all__ = [
     "ActionKind",
@@ -26,6 +27,7 @@ __all__ = [
     "ProviderMode",
     "ProviderRegistry",
     "ProviderScanResult",
+    "ProviderSnapshot",
     "ProviderStatus",
     "ProviderUpdate",
     "UpdateProvider",
