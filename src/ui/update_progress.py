@@ -1,7 +1,7 @@
 """Visible, truthful progress for foreground Winget update operations.
 
 Winget exposes useful stage and download information, but installers do not
-always report a percentage (especially in silent mode).  This layer therefore
+always report a percentage (especially in silent mode). This layer therefore
 shows real percentages/byte progress when present and explicitly labels opaque
 installer work instead of inventing an overall percentage.
 """
@@ -70,7 +70,9 @@ def observe_winget_update_output(raw: str) -> Optional[UpdateProgressObservation
 
     percent, byte_detail = _byte_percent(text)
     if percent is not None:
-        return UpdateProgressObservation("Downloading", byte_detail or "Downloading", percent)
+        return UpdateProgressObservation(
+            "Downloading", byte_detail or "Downloading", percent
+        )
 
     percent_matches = list(_PERCENT_RE.finditer(text))
     if percent_matches:
@@ -80,24 +82,40 @@ def observe_winget_update_output(raw: str) -> Optional[UpdateProgressObservation
 
     # Check the most meaningful lifecycle phrases from most-specific to broad.
     if "successfully installed" in lowered or "successfully upgraded" in lowered:
-        return UpdateProgressObservation("Finishing", "Package installation completed", 100)
+        return UpdateProgressObservation(
+            "Finishing", "Package installation completed", 100
+        )
+    if "no applicable upgrade found" in lowered:
+        return UpdateProgressObservation(
+            "Finishing", "No applicable upgrade was found"
+        )
     if "starting package install" in lowered or "starting package upgrade" in lowered:
         return UpdateProgressObservation(
             "Installing",
             "Installer is running; no percentage has been reported",
         )
-    if "installer hash" in lowered and ("verified" in lowered or "verification" in lowered):
-        return UpdateProgressObservation("Verifying", "Verifying downloaded installer")
     if "successfully verified installer hash" in lowered:
-        return UpdateProgressObservation("Verifying", "Downloaded installer verified")
+        return UpdateProgressObservation(
+            "Verifying", "Downloaded installer verified"
+        )
+    if "installer hash" in lowered and (
+        "verified" in lowered or "verification" in lowered
+    ):
+        return UpdateProgressObservation(
+            "Verifying", "Verifying downloaded installer"
+        )
     if "downloading" in lowered or "download" in lowered:
-        return UpdateProgressObservation("Downloading", "Downloading installer/package")
-    if "found " in lowered or "version" in lowered:
-        return UpdateProgressObservation("Resolving", "Resolving package and target version")
-    if "no applicable upgrade found" in lowered:
-        return UpdateProgressObservation("Finishing", "No applicable upgrade was found")
+        return UpdateProgressObservation(
+            "Downloading", "Downloading installer/package"
+        )
     if "failed" in lowered or "error" in lowered:
-        return UpdateProgressObservation("Problem", "Winget reported an update problem")
+        return UpdateProgressObservation(
+            "Problem", "Winget reported an update problem"
+        )
+    if "found " in lowered or "version" in lowered:
+        return UpdateProgressObservation(
+            "Resolving", "Resolving package and target version"
+        )
     return None
 
 
@@ -116,7 +134,9 @@ def _display_name_for_ref(window, ref: dict) -> str:
     if model is not None:
         match_by = ref.get("match_by")
         for item in getattr(model, "_data", []):
-            candidate = item.get("Id") if match_by == "id" else item.get("Name")
+            candidate = (
+                item.get("Id") if match_by == "id" else item.get("Name")
+            )
             if str(candidate or "").strip().casefold() == value.casefold():
                 return str(item.get("Name") or value or "Package")
     return value or "Package"
@@ -125,6 +145,25 @@ def _display_name_for_ref(window, ref: dict) -> str:
 def _install_progress_ui(window) -> None:
     banner = QWidget(window.update_tab)
     banner.setObjectName("updateProgressBanner")
+    banner.setStyleSheet(
+        "QWidget#updateProgressBanner {"
+        " background-color: rgba(18, 20, 31, 0.90);"
+        " border: 1px solid rgba(122, 162, 247, 0.48);"
+        " border-radius: 8px;"
+        "}"
+        "QLabel#updateProgressTitle { color: #f4f7ff; font-weight: 700; }"
+        "QLabel#updateProgressMeta { color: #9dbdff; font-weight: 650; }"
+        "QLabel#updateProgressDetail { color: #a9b3cb; }"
+        "QProgressBar#updateOperationProgress {"
+        " background-color: #24283b; color: #f4f7ff;"
+        " border: 1px solid #414868; border-radius: 5px;"
+        " text-align: center; min-height: 16px; max-height: 16px;"
+        " font-size: 8pt; font-weight: 700;"
+        "}"
+        "QProgressBar#updateOperationProgress::chunk {"
+        " background-color: #7aa2f7; border-radius: 4px;"
+        "}"
+    )
     outer = QVBoxLayout(banner)
     outer.setContentsMargins(12, 8, 12, 8)
     outer.setSpacing(5)
@@ -147,6 +186,8 @@ def _install_progress_ui(window) -> None:
     progress = QProgressBar()
     progress.setObjectName("updateOperationProgress")
     progress.setTextVisible(True)
+    progress.setMinimumHeight(18)
+    progress.setMaximumHeight(18)
     progress.setRange(0, 0)
     outer.addWidget(progress)
 
@@ -180,7 +221,9 @@ def _refresh_elapsed(window) -> None:
         return
     elapsed = _format_elapsed(time.monotonic() - started)
     base = getattr(window, "_visible_update_detail_base", "Working")
-    window.update_progress_detail.setText(f"{base}  •  elapsed {elapsed}")
+    window.update_progress_detail.setText(
+        f"{base}  •  elapsed {elapsed}"
+    )
 
 
 def _start_package_ui(window) -> None:
@@ -193,7 +236,7 @@ def _start_package_ui(window) -> None:
     name = _display_name_for_ref(window, ref)
 
     window._visible_update_started_at = time.monotonic()
-    window._visible_update_detail_base = "Preparing update"
+    window._visible_update_detail_base = "Starting Winget update"
     window.update_progress_title.setText(f"Updating {name}")
     window.update_progress_meta.setText(f"Package {index} of {total}")
     window.update_progress_banner.setVisible(True)
@@ -217,7 +260,11 @@ def _finish_update_ui(window, code: int) -> None:
     if not hasattr(window, "update_progress_banner"):
         return
     ref = getattr(window, "current_package_ref", {})
-    name = _display_name_for_ref(window, ref) if isinstance(ref, dict) else "Package"
+    name = (
+        _display_name_for_ref(window, ref)
+        if isinstance(ref, dict)
+        else "Package"
+    )
     if code == 0:
         window._visible_update_detail_base = "Completed successfully"
         _set_bar(window, 100)
@@ -226,6 +273,11 @@ def _finish_update_ui(window, code: int) -> None:
         _set_bar(window, None)
     _refresh_elapsed(window)
     window.update_progress_title.setText(f"{name} update")
+
+
+def _hide_banner_if_idle(window) -> None:
+    if getattr(window, "current_operation", None) != "update":
+        window.update_progress_banner.setVisible(False)
 
 
 def apply_update_progress(window) -> None:
@@ -240,15 +292,21 @@ def apply_update_progress(window) -> None:
     timer.timeout.connect(lambda: _refresh_elapsed(window))
     window._update_progress_timer = timer
     window._visible_update_started_at = None
-    window._visible_update_detail_base = "Preparing update"
+    window._visible_update_detail_base = "Starting Winget update"
 
+    # Preserve the final hardened methods exactly and decorate only their UI
+    # side-effects. No command construction, target selection, retry, watchdog,
+    # or completion authority is reimplemented here.
     original_run_next = window.run_next_update
     original_output = window._handle_process_output
     original_finished = window.process_finished
 
     def run_next_with_progress():
         original_run_next()
-        if window.current_operation == "update" and getattr(window, "current_package_ref", None):
+        if (
+            window.current_operation == "update"
+            and getattr(window, "current_package_ref", None)
+        ):
             _start_package_ui(window)
 
     def output_with_progress(stream_name, raw):
@@ -262,7 +320,7 @@ def apply_update_progress(window) -> None:
         original_finished(code, status)
         if was_update and window.current_operation != "update":
             timer.stop()
-            QTimer.singleShot(3500, lambda: window.update_progress_banner.setVisible(False))
+            QTimer.singleShot(3500, lambda: _hide_banner_if_idle(window))
 
     window.run_next_update = run_next_with_progress
     window._handle_process_output = output_with_progress
