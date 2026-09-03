@@ -19,6 +19,10 @@ def test_qss_exists():
     assert "QWidget#actionBar" in content
     assert 'QPushButton[compact="true"]' in content
     assert "QScrollArea#settingsScroll" in content
+    assert "QTableView::item:selected" in content
+    # Table interaction is row-based. A per-cell hover background makes one
+    # cell visually diverge from the row and can hide/reveal stale paint state.
+    assert "QTableView::item:hover" not in content
 
 
 def test_normal_main_arms_optimized_startup_before_legacy_fallback():
