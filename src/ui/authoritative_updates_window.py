@@ -15,10 +15,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex
 
-from src.ui.startup_optimized_window import StartupOptimizedMainWindow
+from src.ui.update_progress import UpdateProgressMainWindow
 
 
-class AuthoritativeUpdatesMainWindow(StartupOptimizedMainWindow):
+class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow):
     """Preserve Detective rows while counting only authoritative Winget updates."""
 
     @staticmethod
