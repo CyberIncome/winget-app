@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QModelIndex, QTimer
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
-from src.logic.worker_jobs import inventory_scan_worker
+from src.logic.worker_jobs import (
+    inventory_base_scan_worker,
+    portable_inventory_worker,
+)
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
 
 class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
-    """Run independent base scans together and defer optional enrichment."""
+    """Run fast base scans together and defer optional/slow enrichment."""
 
     def __init__(self):
         self._startup_started_at: float | None = None
@@ -21,9 +25,50 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         self._startup_background_detective = False
         self._startup_app_release_deferred = False
         super().__init__()
+        self._install_inventory_loading_ui()
+
+    def _install_inventory_loading_ui(self) -> None:
+        """Give Inventory its own progress state independent of the global bar."""
+        banner = QWidget(self.inventory_tab)
+        banner.setObjectName("inventoryLoadingBanner")
+        layout = QHBoxLayout(banner)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(10)
+        label = QLabel("Loading inventory...")
+        label.setObjectName("inventoryLoadingLabel")
+        progress = QProgressBar()
+        progress.setObjectName("inventoryLoadingProgress")
+        progress.setTextVisible(False)
+        progress.setRange(0, 0)
+        progress.setFixedWidth(160)
+        layout.addWidget(label)
+        layout.addStretch()
+        layout.addWidget(progress)
+        self.inventory_tab.layout().insertWidget(0, banner)
+        banner.setVisible(False)
+        self.inventory_loading_banner = banner
+        self.inventory_loading_label = label
+        self.inventory_loading_progress = progress
+
+    def _set_inventory_loading(self, message: str, active: bool = True) -> None:
+        banner = getattr(self, "inventory_loading_banner", None)
+        label = getattr(self, "inventory_loading_label", None)
+        progress = getattr(self, "inventory_loading_progress", None)
+        if banner is None or label is None or progress is None:
+            return
+        label.setText(message)
+        progress.setVisible(active)
+        if active:
+            progress.setRange(0, 0)
+        banner.setVisible(True)
+
+    def _hide_inventory_loading(self) -> None:
+        banner = getattr(self, "inventory_loading_banner", None)
+        if banner is not None:
+            banner.setVisible(False)
 
     def startup_sequence(self):
-        """Start authoritative WinGet and local inventory scans concurrently."""
+        """Start authoritative WinGet and fast local inventory scans concurrently."""
         if self._is_closing or self._startup_stage != "boot":
             return
 
@@ -33,11 +78,8 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
             "STARTUP STAGE id=%s stage=parallel-base",
             self._session_id,
         )
+        self._set_inventory_loading("Loading installed applications...", True)
 
-        # The update scan owns the foreground QProcess. The independent local
-        # inventory worker is intentionally *not* registered as a global busy
-        # task during startup, so Updates becomes usable as soon as WinGet has
-        # finished even if local inventory is still loading in the background.
         self.refresh_updates()
         QTimer.singleShot(0, self._start_startup_inventory_scan)
 
@@ -46,16 +88,109 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
             return
         if "inventory" in self._managed_jobs:
             return
-        self.logger.info("Starting non-blocking startup inventory scan.")
+        self.logger.info("Starting fast startup inventory base scan.")
         started = self._start_job(
             "inventory",
-            inventory_scan_worker,
-            timeout=180,
+            inventory_base_scan_worker,
+            timeout=90,
             on_success=self._inventory_job_succeeded,
             on_failure=self._inventory_job_failed,
         )
         if not started:
             self._inventory_job_failed("startup inventory worker did not start")
+
+    def _start_portable_inventory_scan(self) -> None:
+        if self._is_closing or "inventory-portable" in self._managed_jobs:
+            return
+        model = self.inventory_proxy.sourceModel()
+        if model is None:
+            self._hide_inventory_loading()
+            return
+        existing_names = [
+            str(item.get("Name") or "")
+            for item in getattr(model, "_data", [])
+            if item.get("Name")
+        ]
+        self._set_inventory_loading(
+            "Installed apps loaded — discovering Start Menu/Desktop shortcut apps...",
+            True,
+        )
+        started = self._start_job(
+            "inventory-portable",
+            portable_inventory_worker,
+            args=(existing_names,),
+            timeout=180,
+            on_success=self._portable_inventory_succeeded,
+            on_failure=self._portable_inventory_failed,
+        )
+        if started:
+            self.logger.info(
+                "STARTUP BACKGROUND ENRICHMENT id=%s job=inventory-portable",
+                self._session_id,
+            )
+        else:
+            self._portable_inventory_failed("shortcut inventory worker did not start")
+
+    def _portable_inventory_succeeded(self, payload) -> None:
+        if self._is_closing:
+            return
+        payload = payload or {}
+        items = list(payload.get("inventory") or [])
+        timings = dict(payload.get("timings") or {})
+        model = self.inventory_proxy.sourceModel()
+        added = 0
+        if model is not None and items:
+            existing_names = {
+                str(item.get("Name") or "").casefold()
+                for item in getattr(model, "_data", [])
+            }
+            existing_ids = {
+                str(item.get("Id") or "").casefold()
+                for item in getattr(model, "_data", [])
+                if item.get("Id")
+            }
+            additions = []
+            for item in items:
+                name_key = str(item.get("Name") or "").casefold()
+                id_key = str(item.get("Id") or "").casefold()
+                if not name_key or name_key in existing_names:
+                    continue
+                if id_key and id_key in existing_ids:
+                    continue
+                additions.append(item)
+                existing_names.add(name_key)
+                if id_key:
+                    existing_ids.add(id_key)
+
+            if additions:
+                first = len(model._data)
+                last = first + len(additions) - 1
+                model.beginInsertRows(QModelIndex(), first, last)
+                for item in additions:
+                    model._data.append(item)
+                    model._selected[item.get("Id") or item.get("Name")] = False
+                model.endInsertRows()
+                added = len(additions)
+                self._stat_installed = len(model._data)
+                self.update_stats()
+
+        self.logger.info(
+            "STARTUP PORTABLE INVENTORY COMPLETE elapsed=%.3fs candidates=%s added=%s",
+            float(timings.get("total_seconds") or 0.0),
+            timings.get("portable_candidates", "?"),
+            added,
+        )
+        self._hide_inventory_loading()
+
+    def _portable_inventory_failed(self, message) -> None:
+        if self._is_closing:
+            return
+        self.logger.warning("Portable shortcut inventory unavailable: %s", message)
+        self._set_inventory_loading(
+            "Installed apps loaded — shortcut app discovery was unavailable.",
+            False,
+        )
+        QTimer.singleShot(8000, self._hide_inventory_loading)
 
     def refresh_inventory(self):
         """Keep Detective results bound to the inventory snapshot they scanned."""
@@ -67,6 +202,10 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
                 "Inventory refresh will be available when background Detective finishes"
             )
             return
+        self._set_inventory_loading(
+            "Refreshing complete inventory, including shortcut apps...",
+            True,
+        )
         return super().refresh_inventory()
 
     def set_ui_busy(self, status, busy, task_name="core"):
@@ -122,7 +261,9 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
 
     def _inventory_job_succeeded(self, payload):
         if self._startup_stage != "parallel-base":
-            return super()._inventory_job_succeeded(payload)
+            result = super()._inventory_job_succeeded(payload)
+            self._hide_inventory_loading()
+            return result
         if self._is_closing:
             return
 
@@ -132,10 +273,9 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         timings = dict(payload.get("timings") or {})
         if timings:
             self.logger.info(
-                "STARTUP INVENTORY PROFILE registry=%.3fs shortcuts=%.3fs "
-                "assembly=%.3fs worker_total=%.3fs registry_items=%s inventory_items=%s",
+                "STARTUP INVENTORY BASE PROFILE registry=%.3fs assembly=%.3fs "
+                "worker_total=%.3fs registry_items=%s inventory_items=%s",
                 float(timings.get("registry_seconds") or 0.0),
-                float(timings.get("shortcut_scan_seconds") or 0.0),
                 float(timings.get("assembly_seconds") or 0.0),
                 float(timings.get("worker_total_seconds") or 0.0),
                 timings.get("registry_items", "?"),
@@ -144,18 +284,19 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         self._startup_inventory_done = True
         self._log_base_stage_complete("inventory")
         self._finish_startup_base_if_ready()
+        QTimer.singleShot(0, self._start_portable_inventory_scan)
 
     def _inventory_job_failed(self, message):
         if self._startup_stage != "parallel-base":
+            self._hide_inventory_loading()
             return super()._inventory_job_failed(message)
         self.logger.warning("Startup inventory unavailable: %s", message)
+        self._set_inventory_loading("Inventory scan failed.", False)
         self._startup_inventory_done = True
         self._log_base_stage_complete("inventory-failed")
         self._finish_startup_base_if_ready()
 
     def _advance_startup_to_api(self):
-        # The old serial startup used Detective completion to unlock the GitHub
-        # API check. In the optimized lane both are optional post-ready work.
         if self._startup_stage in {"parallel-base", "ready"}:
             return
         return super()._advance_startup_to_api()
@@ -219,8 +360,6 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
                     self._session_id,
                 )
 
-        # Rate-limit status is informational. Run it after Ready so keyring and
-        # network latency cannot extend the user's startup wait.
         QTimer.singleShot(0, self.update_github_api_status)
         if self._startup_app_release_deferred:
             self._startup_app_release_deferred = False
