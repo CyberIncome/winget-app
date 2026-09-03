@@ -67,7 +67,13 @@ class ProviderRegistry:
         self,
         provider_ids: Iterable[str] | None = None,
     ) -> tuple[ProviderScanResult, ...]:
-        """Scan selected providers and keep failures provider-local."""
+        """Scan selected providers and keep failures provider-local.
+
+        Providers declaring ``requires_opt_in`` are probed but not scanned by a
+        broad/default scan. Passing explicit provider ids is the opt-in signal
+        for this read-only development layer.
+        """
+        explicit_selection = provider_ids is not None
         if provider_ids is None:
             providers = list(self._providers.values())
         else:
@@ -89,6 +95,17 @@ class ProviderRegistry:
 
             if not status.available:
                 results.append(ProviderScanResult(status=status))
+                continue
+
+            if status.requires_opt_in and not explicit_selection:
+                results.append(
+                    ProviderScanResult(
+                        status=status,
+                        warnings=(
+                            "provider requires explicit opt-in and was not scanned",
+                        ),
+                    )
+                )
                 continue
 
             try:
