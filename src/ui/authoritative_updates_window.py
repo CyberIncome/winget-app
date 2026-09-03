@@ -54,6 +54,26 @@ class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow):
             if item.get("UpdateSource") == "detective"
         ]
 
+    def _drop_detective_rows(self) -> int:
+        """Remove the previous Detective snapshot before accepting a fresh one."""
+        model = self.proxy_model.sourceModel()
+        if model is None:
+            return 0
+
+        rows = [
+            row
+            for row, item in enumerate(getattr(model, "_data", []))
+            if item.get("UpdateSource") == "detective"
+        ]
+        for row in reversed(rows):
+            item = model._data[row]
+            key = model.selection_key_for_item(item)
+            model.beginRemoveRows(QModelIndex(), row, row)
+            model._data.pop(row)
+            model._selected.pop(key, None)
+            model.endRemoveRows()
+        return len(rows)
+
     def _restore_detective_rows(self, detective_rows: list[dict]) -> int:
         """Restore only Detective rows not superseded by fresh Winget rows."""
         model = self.proxy_model.sourceModel()
@@ -113,11 +133,13 @@ class AuthoritativeUpdatesMainWindow(UpdateProgressMainWindow):
         return result
 
     def _detective_job_succeeded(self, results):
-        """Allow Detective to enrich the table without inflating update count."""
+        """Replace Detective snapshot without inflating authoritative count."""
+        removed = self._drop_detective_rows()
         result = super()._detective_job_succeeded(results)
         authoritative = self._sync_authoritative_update_count()
         self.logger.info(
-            "Detective enrichment complete; authoritative_updates=%d",
+            "Detective enrichment complete; replaced=%d authoritative_updates=%d",
+            removed,
             authoritative,
         )
         return result
