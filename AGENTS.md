@@ -1,9 +1,11 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/main.py` is the canonical GUI entry point and constructs `StartupOptimizedMainWindow`.
-- The canonical GUI inheritance stack is intentionally layered: `StartupOptimizedMainWindow -> VersionIntegrityMainWindow -> VersionAwareMainWindow -> WorkbenchMainWindow -> ProductMainWindow -> ExperienceMainWindow -> RuntimeMainWindow -> ProductionMainWindow -> HardenedMainWindow -> historical presentation`.
-- `src/ui/startup_optimized_window.py` owns the final startup schedule: authoritative WinGet and fast registry-backed inventory scans may run concurrently, readiness waits for both base scans, and optional Detective/GitHub/app-release/portable-shortcut enrichment continues afterward. Inventory has its own visible loading state while slow shortcut discovery runs. Inventory refresh remains guarded while Detective owns an inventory snapshot.
+- `src/main.py` is the canonical GUI entry point and constructs `AuthoritativeUpdatesMainWindow`.
+- The canonical GUI inheritance stack is intentionally layered: `AuthoritativeUpdatesMainWindow -> UpdateProgressMainWindow -> StartupOptimizedMainWindow -> VersionIntegrityMainWindow -> VersionAwareMainWindow -> WorkbenchMainWindow -> ProductMainWindow -> ExperienceMainWindow -> RuntimeMainWindow -> ProductionMainWindow -> HardenedMainWindow -> historical presentation`.
+- `src/ui/authoritative_updates_window.py` keeps the Updates model authoritative: WinGet refreshes replace the WinGet snapshot, Detective rows remain informational, Detective reruns replace their previous snapshot, and the actionable update statistic counts only current WinGet-proven rows.
+- `src/ui/update_progress.py` owns truthful live WinGet update progress presentation without rebinding the core QProcess signal lifecycle.
+- `src/ui/startup_optimized_window.py` owns the final startup schedule: authoritative WinGet and fast registry-backed inventory scans may run concurrently, readiness waits for both base scans, and optional Detective/GitHub/app-release/portable-shortcut enrichment continues afterward. Inventory has its own visible loading state while slow shortcut discovery runs. Inventory refresh remains guarded while portable enrichment or Detective owns an inventory snapshot.
 - `src/ui/version_integrity_window.py` owns final scan-target identity and asynchronous version-reconciliation lifecycle guards.
 - `src/ui/version_aware_window.py` owns Windows-vs-WinGet version provenance, exact target-version execution, version-review UX, and read-only double-click inspection.
 - `src/ui/workbench_window.py` owns WinGet restore-list export, exact package inspection, and update-batch cancellation.
@@ -15,21 +17,27 @@
 - `src/ui/selection_polish.py` is the final row/checkbox interaction pass. Row highlight and checkbox state are one unified selection set: plain click selects one row, Ctrl-click adds/removes individual rows, and Shift-click selects a contiguous range. The first checkbox column is a full-cell hit target and must preserve the same selection semantics as the rest of the row.
 - `src/ui/layout_polish.py` and `src/ui/context_polish.py` normalize the fully constructed layered GUI after feature construction without owning package execution logic.
 - `src/ui/main_window.py` is an import-compatible model/presentation shim; the historical implementation is preserved in `src/ui/legacy_window.py`.
+- `src/providers/` is the additive multi-provider update architecture. `base.py` defines provider authority/capability/update/action contracts; `registry.py` owns provider-scoped discovery and action planning; `snapshot.py` aggregates universal update state without hiding provider failures; provider modules implement one owning ecosystem each. During migration, provider execution is not wired into the production GUI.
+- `src/providers/cli.py` is a read-only developer surface for provider probe/scan verification. It must remain scan-only until provider execution has dedicated Windows lifecycle, exact-target, confirmation, progress, and cancellation acceptance.
+- `docs/MULTI_PROVIDER.md` is the provider roadmap and authority contract. New providers must follow its managed/handoff/informational distinctions rather than being added directly to the mixed historical Updates model.
 - `src/logic/inventory_scan.py` exposes separate fast registry inventory and slow shortcut-backed portable enrichment paths. It reuses one `WScript.Shell` COM automation object for a whole shortcut scan and never makes shortcut resolution part of initial inventory readiness.
 - `src/logic/` contains command construction, strict Winget parsing, version provenance, bounded subprocess capture, Windows Job Object containment, configuration, HTTPS policy, worker targets, history, release awareness, and legacy inventory/version heuristics.
-- `tests/` contains pytest suites (`test_*.py`) covering UI and logic, including native Windows process-tree containment.
+- `tests/` contains pytest suites (`test_*.py`) covering UI and logic, including native Windows process-tree containment and provider authority/normalization tests.
 - `scripts/verify_windows.py` is the release-relevant local Windows verification gate; `scripts/smoke_gui.py` exercises canonical polished product Qt construction/teardown without running scans.
 - `scripts/build_windows.py` builds the public portable GUI/CLI assets; `scripts/build_release.py` builds the complete installer/release bundle.
 - `conductor/` stores historical product specs, plans, and style guides.
-- `docs/reliability-hardening/` is historical evidence for the accepted hardening baseline. Do not rewrite past PASS claims to imply later product-evolution work was part of that acceptance.
+- `docs/reliability-hardening/` is historical evidence for the accepted hardening baseline. Do not rewrite past PASS claims to imply later product-evolution or multi-provider work was part of that acceptance.
 
 ## Build, Test, & Development Commands
 - `python -m venv .venv` creates a virtual environment.
 - `pip install -r requirements-dev.txt` installs runtime plus development/test/build dependencies.
 - `python -m src.main` runs the canonical GUI from the repo root.
-- `python -m src.cli --help` shows CLI commands.
+- `python -m src.cli --help` shows the production CLI commands.
+- `python -m src.providers.cli status` probes additive provider availability without changing the system.
+- `python -m src.providers.cli scan --provider steam` runs one read-only provider scan during development.
 - `pytest` runs the full test suite.
 - `pytest tests/test_upgrade_parser.py` runs the strict parser tests.
+- `pytest tests/test_providers.py tests/test_provider_dispatch.py tests/test_provider_snapshot.py tests/test_winget_provider.py` runs the provider foundation tests.
 - On Windows, `python scripts/verify_windows.py` runs the local deterministic acceptance gate without GitHub Actions.
 - On Windows, `python scripts/verify_windows.py --live-winget` additionally performs a read-only real Winget scan.
 - On Windows, `python scripts/verify_windows.py --build` additionally builds and launch-smokes the portable GUI/CLI assets.
@@ -56,6 +64,9 @@ Follow `conductor/code_styleguides/*.md` (Google Python Style Guide summary):
 - Managed read-only WinGet subprocesses that run inside cancellable spawned workers must require Windows process-tree containment; cancellation must not strand a descendant `winget.exe`.
 - Startup optimization must not weaken package authority: base readiness still requires the authoritative WinGet scan and fast local registry inventory to settle, while optional shortcut enrichment may continue afterward.
 - Portable shortcut enrichment may append rows to the existing inventory source model, but it must not reorder existing source rows while Detective results are index-bound to the base snapshot.
+- Provider scans must distinguish unavailable, failed, warning/partial, and successful-zero-update states. A failed provider must never be converted into an empty successful result.
+- Provider command actions must preserve provider id, item identity, and the exact target version from the scan. Cross-provider dispatch and implicit latest-version substitution are release-blocking failures.
+- Launcher-owned providers start as handoff/informational unless deterministic execution ownership has provider-specific acceptance evidence.
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short and imperative; Conventional Commit style is preferred.
@@ -67,8 +78,11 @@ Follow `conductor/code_styleguides/*.md` (Google Python Style Guide summary):
 - This is a Windows-focused app (uses `pywin32` and native Windows APIs); avoid platform-specific assumptions without guards.
 - Keep secrets and machine-specific paths out of the repo; GitHub PATs belong in the OS credential store, not JSON config.
 - Network version checks must use the bounded HTTPS helper and must not forward secrets across origins.
-- Only rows explicitly proven by the current Winget scan may trigger Winget package updates; detective-only findings are informational.
-- GUI package-update identity is **match field + package + source + exact target version from the current scan**. Do not silently fall back to a newer/latest version if the scan target is missing, truncated, ambiguous, or changed.
+- Only rows explicitly proven by the current Winget scan may trigger the existing production WinGet package-update path; detective-only findings are informational.
+- GUI WinGet package-update identity is **match field + package + source + exact target version from the current scan**. Do not silently fall back to a newer/latest version if the scan target is missing, truncated, ambiguous, or changed.
+- Provider update identity is **provider + provider-owned item id**. Display-name similarity must never merge authority across providers.
+- A managed provider action requires the exact scanned target. If the provider cannot guarantee the target, downgrade that row to handoff/blocked/informational rather than executing latest.
+- Third-party provider authentication is opt-in and must not store credentials in repo/config plaintext. Provider integrations should prefer the owning tool's supported credential store.
 - Windows `DisplayVersion` and WinGet manifest `PackageVersion` are not assumed to share one numbering scheme. Preserve provenance and review warnings rather than inventing downgrade/upgrade semantics.
 - Managed read-only/background WinGet commands use kill-on-close Windows Job Object containment when cancellation/shutdown ownership requires the entire process tree to terminate.
-- The current HTTPS policy does not provide a DNS/IP-level private-network denylist; do not describe detective URL handling as full SSRF isolation.
+- The current HTTPS policy does not provide a DNS/IP-level private-network denylist; do not describe detective or provider URL handling as full SSRF isolation.
