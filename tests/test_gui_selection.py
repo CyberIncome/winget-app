@@ -38,6 +38,7 @@ def _window(qtbot):
             },
         ]
     )
+    QApplication.processEvents()
     return window
 
 
@@ -72,6 +73,7 @@ def test_keyboard_native_checkbox_toggle_does_not_move_inspection_highlight(qtbo
 
     assert _checked(model, 0) is True
     assert [index.row() for index in window.table.selectionModel().selectedRows()] == [1]
+    assert window.update_selected_btn.text() == "Update Checked (1)"
 
 
 def test_highlight_only_is_never_an_update_target(qtbot, monkeypatch):
@@ -80,7 +82,7 @@ def test_highlight_only_is_never_an_update_target(qtbot, monkeypatch):
     monkeypatch.setattr(window, "batch_update", lambda refs: captured.extend(refs))
 
     window.table.selectRow(0)
-    update_checked(window)
+    window.update_selected()
 
     assert captured == []
     assert "Check one or more" in window.status_label.text()
@@ -95,8 +97,8 @@ def test_checked_row_is_the_only_update_target(qtbot, monkeypatch):
     # Inspect Beta while explicitly checking Alpha. The action must follow the
     # checkbox, not the highlighted row.
     window.table.selectRow(1)
-    model.set_checked(0, True)
-    update_checked(window)
+    model.set_checked(0, True, emit_signal=True)
+    window.update_selected()
 
     assert len(captured) == 1
     assert captured[0]["value"] == "Example.Alpha"
@@ -114,11 +116,13 @@ def test_visible_bulk_check_respects_filter_and_clear_is_independent(qtbot):
     assert set_visible_checked(window, True) == 1
     assert _checked(model, 0) is True
     assert _checked(model, 1) is False
+    assert window.update_selected_btn.text() == "Update Checked (1)"
 
     window.table.selectRow(0)
     assert clear_all_checked(window) == 1
     assert _checked(model, 0) is False
     assert window.table.selectionModel().hasSelection() is True
+    assert window.update_selected_btn.text() == "Update Checked"
 
 
 def test_selection_polish_restores_full_width_after_model_reload(qtbot):
