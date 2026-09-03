@@ -29,8 +29,8 @@ def test_normal_main_arms_optimized_startup_before_legacy_fallback():
     source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     assert "QTimer.singleShot(100, window.startup_sequence)" in source
     assert 'os.getenv("WUD_PACKAGED_SMOKE") == "1"' in source
-    assert "UpdateProgressMainWindow" in source
-    assert "window = UpdateProgressMainWindow()" in source
+    assert "AuthoritativeUpdatesMainWindow" in source
+    assert "window = AuthoritativeUpdatesMainWindow()" in source
     assert "apply_update_progress(window)" in source
 
 
