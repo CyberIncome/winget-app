@@ -248,10 +248,18 @@ class SteamProvider:
         result = payload.get("response", payload)
         if not isinstance(result, dict):
             return None, f"{app['name']}: malformed Steam update response"
-        if result.get("success") is False:
-            message = str(result.get("message") or "Steam rejected the update check")
+        if result.get("success") is not True:
+            message = str(
+                result.get("message") or "Steam did not confirm a successful update check"
+            )
             return None, f"{app['name']}: {message}"
-        if result.get("up_to_date") is not False:
+        up_to_date = result.get("up_to_date")
+        if not isinstance(up_to_date, bool):
+            return None, (
+                f"{app['name']}: Steam response did not include a valid "
+                "up_to_date state"
+            )
+        if up_to_date:
             return None, None
 
         required = str(result.get("required_version") or "").strip()
