@@ -14,19 +14,17 @@ if str(ROOT) not in sys.path:
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from src.ui.authoritative_updates_window import AuthoritativeUpdatesMainWindow
 from src.ui.context_polish import apply_context_polish
 from src.ui.layout_polish import apply_layout_polish
 from src.ui.selection_polish import apply_selection_polish
-from src.ui.update_progress import (
-    UpdateProgressMainWindow,
-    apply_update_progress,
-)
+from src.ui.update_progress import apply_update_progress
 
 
 def main() -> int:
     """Exercise canonical product Qt construction, polish, and shutdown locally."""
     app = QApplication.instance() or QApplication(sys.argv)
-    window = UpdateProgressMainWindow()
+    window = AuthoritativeUpdatesMainWindow()
     apply_layout_polish(window)
     apply_context_polish(window)
     apply_update_progress(window)
