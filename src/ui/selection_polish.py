@@ -46,6 +46,7 @@ class _CheckboxColumnFilter(QObject):
         if event_type not in {
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
         }:
             return False
         if event.button() != Qt.MouseButton.LeftButton:
@@ -67,8 +68,12 @@ class _CheckboxColumnFilter(QObject):
         if index is None or not index.isValid() or index.column() != 0:
             return False
 
-        # Consume both halves so Qt's delegate cannot toggle a second time.
-        if event_type == QEvent.Type.MouseButtonRelease:
+        # A native double-click sequence should still represent one checkbox
+        # action, not toggle-on/toggle-off in rapid succession.
+        if event_type in {
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        }:
             return True
 
         try:
@@ -118,6 +123,7 @@ class _CheckboxColumnFilter(QObject):
             refresh = getattr(window, "_refresh_update_filter_summary", None)
             if table is getattr(window, "table", None) and callable(refresh):
                 refresh()
+            _refresh_checked_action_state(window)
         return True
 
 
@@ -165,6 +171,9 @@ def _decouple_row_selection(window, table, proxy, pane) -> None:
 
     _enforce_checkbox_column_width(table)
     proxy.sourceModelChanged.connect(lambda: _schedule_checkbox_column_width(table))
+    proxy.sourceModelChanged.connect(
+        lambda: QTimer.singleShot(0, lambda: _refresh_checked_action_state(window))
+    )
 
     event_filter = _CheckboxColumnFilter(window, table, proxy)
     table.viewport().installEventFilter(event_filter)
@@ -177,6 +186,7 @@ def _independent_native_checkbox(window, table, proxy, source_row, checked) -> N
         refresh = getattr(window, "_refresh_update_filter_summary", None)
         if callable(refresh):
             refresh()
+    _refresh_checked_action_state(window)
 
 
 def _checked_source_items(window, table, proxy) -> list[dict]:
@@ -193,6 +203,32 @@ def _checked_source_items(window, table, proxy) -> list[dict]:
             )
         )
     ]
+
+
+def _checked_count_for_current_page(window) -> int:
+    if window.sidebar.currentRow() == 1:
+        return len(
+            _checked_source_items(
+                window,
+                window.inventory_table,
+                window.inventory_proxy,
+            )
+        )
+    return len(
+        _checked_source_items(
+            window,
+            window.table,
+            window.proxy_model,
+        )
+    )
+
+
+def _refresh_checked_action_state(window) -> None:
+    button = getattr(window, "update_selected_btn", None)
+    if button is None:
+        return
+    count = _checked_count_for_current_page(window)
+    button.setText("Update Checked" if count == 0 else f"Update Checked ({count})")
 
 
 def update_checked(window) -> None:
@@ -258,6 +294,7 @@ def set_visible_checked(window, checked: bool) -> int:
     refresh = getattr(window, "_refresh_update_filter_summary", None)
     if callable(refresh):
         refresh()
+    _refresh_checked_action_state(window)
     return changed
 
 
@@ -277,6 +314,7 @@ def clear_all_checked(window) -> int:
     refresh = getattr(window, "_refresh_update_filter_summary", None)
     if callable(refresh):
         refresh()
+    _refresh_checked_action_state(window)
     return changed
 
 
@@ -315,11 +353,10 @@ def _rewire_bulk_checkbox_controls(window) -> None:
         window.update_selected_btn.clicked.disconnect()
     except (RuntimeError, TypeError):
         pass
-    window.update_selected_btn.setText("Update Checked")
     window.update_selected_btn.setToolTip(
         "Update only explicitly checked packages; row highlight is inspection-only"
     )
-    window.update_selected_btn.clicked.connect(lambda: update_checked(window))
+    window.update_selected_btn.clicked.connect(window.update_selected)
 
 
 def apply_selection_polish(window) -> None:
@@ -335,6 +372,9 @@ def apply_selection_polish(window) -> None:
     window.handle_native_checkbox = lambda table, proxy, row, checked: (
         _independent_native_checkbox(window, table, proxy, row, checked)
     )
+    # Preserve the historical public method name for callers/shortcuts, but make
+    # its canonical instance behavior checklist-only as well.
+    window.update_selected = lambda: update_checked(window)
 
     _decouple_row_selection(
         window,
@@ -349,3 +389,7 @@ def apply_selection_polish(window) -> None:
         window.inventory_details,
     )
     _rewire_bulk_checkbox_controls(window)
+    window.sidebar.currentRowChanged.connect(
+        lambda _index: _refresh_checked_action_state(window)
+    )
+    _refresh_checked_action_state(window)
