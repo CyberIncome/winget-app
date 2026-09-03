@@ -31,8 +31,55 @@ def _run_worker(result_queue, operation: Callable[[], Any]) -> None:
         )
 
 
+def inventory_base_scan_worker(result_queue) -> None:
+    """Collect the fast registry-backed inventory base for startup."""
+
+    def operation():
+        from src.logic.inventory_scan import collect_registry_inventory
+        from src.logic.parser import get_registry_data
+
+        started = time.monotonic()
+        registry_started = time.monotonic()
+        reg_data = get_registry_data()
+        registry_seconds = time.monotonic() - registry_started
+        assembly_started = time.monotonic()
+        inventory = collect_registry_inventory(reg_data)
+        assembly_seconds = time.monotonic() - assembly_started
+        return {
+            "registry": reg_data,
+            "inventory": inventory,
+            "timings": {
+                "registry_seconds": round(registry_seconds, 3),
+                "assembly_seconds": round(assembly_seconds, 3),
+                "worker_total_seconds": round(time.monotonic() - started, 3),
+                "registry_items": len(reg_data),
+                "inventory_items": len(inventory),
+            },
+        }
+
+    _run_worker(result_queue, operation)
+
+
+def portable_inventory_worker(existing_names: list[str], result_queue) -> None:
+    """Resolve slow Start Menu/Desktop shortcut inventory after base readiness."""
+
+    def operation():
+        from src.logic.inventory_scan import collect_portable_inventory
+
+        portable, timings = collect_portable_inventory(
+            existing_names,
+            include_timings=True,
+        )
+        return {
+            "inventory": portable,
+            "timings": timings,
+        }
+
+    _run_worker(result_queue, operation)
+
+
 def inventory_scan_worker(result_queue) -> None:
-    """Collect fresh registry and bounded inventory data in an isolated process."""
+    """Collect the complete registry + shortcut inventory for explicit refreshes."""
 
     def operation():
         from src.logic.inventory_scan import collect_total_inventory
