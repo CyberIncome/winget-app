@@ -6,7 +6,7 @@ import time
 
 from PySide6.QtCore import QTimer
 
-from src.ui.hardened_window import HardenedMainWindow
+from src.logic.worker_jobs import inventory_scan_worker
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
 
@@ -34,17 +34,28 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
             self._session_id,
         )
 
-        # Refresh uses the foreground QProcess. Start it first so the production
-        # foreground-exclusion guard sees a clean state. Inventory is an
-        # independent read-only spawned worker and intentionally bypasses that
-        # *user-operation* exclusion only for this controlled startup fan-out.
+        # The update scan owns the foreground QProcess. The independent local
+        # inventory worker is intentionally *not* registered as a global busy
+        # task during startup, so Updates becomes usable as soon as WinGet has
+        # finished even if local inventory is still loading in the background.
         self.refresh_updates()
         QTimer.singleShot(0, self._start_startup_inventory_scan)
 
     def _start_startup_inventory_scan(self):
         if self._is_closing or self._startup_stage != "parallel-base":
             return
-        HardenedMainWindow.refresh_inventory(self)
+        if "inventory" in self._managed_jobs:
+            return
+        self.logger.info("Starting non-blocking startup inventory scan.")
+        started = self._start_job(
+            "inventory",
+            inventory_scan_worker,
+            timeout=180,
+            on_success=self._inventory_job_succeeded,
+            on_failure=self._inventory_job_failed,
+        )
+        if not started:
+            self._inventory_job_failed("startup inventory worker did not start")
 
     def refresh_inventory(self):
         """Keep Detective results bound to the inventory snapshot they scanned."""
@@ -118,6 +129,18 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         payload = payload or {}
         self._cached_reg_data = payload.get("registry") or []
         self.set_inventory_model(payload.get("inventory") or [])
+        timings = dict(payload.get("timings") or {})
+        if timings:
+            self.logger.info(
+                "STARTUP INVENTORY PROFILE registry=%.3fs shortcuts=%.3fs "
+                "assembly=%.3fs worker_total=%.3fs registry_items=%s inventory_items=%s",
+                float(timings.get("registry_seconds") or 0.0),
+                float(timings.get("shortcut_scan_seconds") or 0.0),
+                float(timings.get("assembly_seconds") or 0.0),
+                float(timings.get("worker_total_seconds") or 0.0),
+                timings.get("registry_items", "?"),
+                timings.get("inventory_items", "?"),
+            )
         self._startup_inventory_done = True
         self._log_base_stage_complete("inventory")
         self._finish_startup_base_if_ready()
@@ -125,6 +148,7 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
     def _inventory_job_failed(self, message):
         if self._startup_stage != "parallel-base":
             return super()._inventory_job_failed(message)
+        self.logger.warning("Startup inventory unavailable: %s", message)
         self._startup_inventory_done = True
         self._log_base_stage_complete("inventory-failed")
         self._finish_startup_base_if_ready()
