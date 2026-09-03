@@ -69,11 +69,15 @@ def test_context_polish_is_presentation_only():
     assert "batch_update(" not in source
 
 
-def test_selection_polish_is_interaction_only():
+def test_selection_polish_owns_only_explicit_checked_action_dispatch():
     source = _source("src/ui/selection_polish.py")
     assert "apply_selection_polish" in source
     assert "Check Visible" in source
     assert "Clear Checked" in source
+    assert "Update Checked" in source
+    assert "window.batch_update(refs)" in source
+    # Selection policy may dispatch already-proven refs, but it must never build
+    # or execute package commands itself.
     assert "get_update_cmd" not in source
     assert "executor" not in source
-    assert "batch_update(" not in source
+    assert "QProcess" not in source
