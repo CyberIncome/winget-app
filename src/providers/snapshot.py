@@ -46,6 +46,14 @@ class ProviderSnapshot:
         )
 
     @property
+    def informational_updates(self) -> int:
+        return sum(
+            1
+            for update in self.updates
+            if update.mode == ProviderMode.INFORMATIONAL
+        )
+
+    @property
     def blocked_updates(self) -> int:
         return sum(
             1
@@ -83,6 +91,7 @@ class ProviderSnapshot:
             "total_updates": self.total_updates,
             "managed_updates": self.managed_updates,
             "handoff_updates": self.handoff_updates,
+            "informational_updates": self.informational_updates,
             "blocked_updates": self.blocked_updates,
             "provider_failures": self.provider_failures,
             "warning_count": self.warning_count,
