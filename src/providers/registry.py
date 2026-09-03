@@ -5,11 +5,26 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from src.providers.base import (
+    ProviderCategory,
+    ProviderMode,
     ProviderScanResult,
     ProviderStatus,
     UpdateProvider,
     validate_provider_id,
 )
+
+
+def _failed_probe_status(provider_id: str, exc: Exception) -> ProviderStatus:
+    """Create a diagnostic fallback when a provider cannot describe itself."""
+    provider_id = validate_provider_id(provider_id)
+    return ProviderStatus(
+        provider_id=provider_id,
+        display_name=provider_id,
+        mode=ProviderMode.INFORMATIONAL,
+        category=ProviderCategory.OTHER,
+        available=False,
+        reason=f"provider probe failed: {exc}",
+    )
 
 
 class ProviderRegistry:
@@ -42,13 +57,7 @@ class ProviderRegistry:
             try:
                 statuses.append(provider.probe())
             except Exception as exc:
-                # A broken optional provider must not make another provider look
-                # unavailable. Preserve the provider's declared identity if the
-                # object can still expose a status skeleton through ``probe`` is
-                # impossible, so surface the exception to ``scan_all`` instead.
-                raise RuntimeError(
-                    f"provider {provider.provider_id!r} probe failed: {exc}"
-                ) from exc
+                statuses.append(_failed_probe_status(provider.provider_id, exc))
         return tuple(statuses)
 
     def scan_all(
@@ -66,11 +75,14 @@ class ProviderRegistry:
             try:
                 status = provider.probe()
             except Exception as exc:
-                # Do not invent an unavailable ProviderStatus because the
-                # provider itself owns its display/category/mode metadata.
-                raise RuntimeError(
-                    f"provider {provider.provider_id!r} probe failed: {exc}"
-                ) from exc
+                status = _failed_probe_status(provider.provider_id, exc)
+                results.append(
+                    ProviderScanResult(
+                        status=status,
+                        error=status.reason,
+                    )
+                )
+                continue
 
             if not status.available:
                 results.append(ProviderScanResult(status=status))
