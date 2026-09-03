@@ -148,8 +148,10 @@ class ProviderUpdate:
             "name",
             _require_clean_text(self.name, field_name="name"),
         )
-        if self.mode == ProviderMode.INFORMATIONAL and self.can_update:
-            raise ValueError("informational provider updates cannot be executable")
+        if self.mode != ProviderMode.MANAGED and self.can_update:
+            raise ValueError(
+                "only managed provider updates can claim direct execution"
+            )
         if self.can_update and not self.available_version:
             raise ValueError("managed updates require an available target version")
 
