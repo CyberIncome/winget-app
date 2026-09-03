@@ -69,15 +69,32 @@ def test_context_polish_is_presentation_only():
     assert "batch_update(" not in source
 
 
-def test_selection_polish_owns_only_explicit_checked_action_dispatch():
+def test_selection_polish_owns_unified_row_checkbox_action_dispatch():
     source = _source("src/ui/selection_polish.py")
     assert "apply_selection_polish" in source
-    assert "Check Visible" in source
-    assert "Clear Checked" in source
-    assert "Update Checked" in source
+    assert "ExtendedSelection" in source
+    assert "ShiftModifier" in source
+    assert "ControlModifier" in source
+    assert "Select Visible" in source
+    assert "Clear Selection" in source
+    assert "Update Selected" in source
     assert "window.batch_update(refs)" in source
     # Selection policy may dispatch already-proven refs, but it must never build
     # or execute package commands itself.
     assert "get_update_cmd" not in source
     assert "executor" not in source
     assert "QProcess" not in source
+
+
+def test_startup_inventory_is_split_into_fast_base_and_slow_enrichment():
+    source = _source("src/ui/startup_optimized_window.py")
+    workers = _source("src/logic/worker_jobs.py")
+    inventory = _source("src/logic/inventory_scan.py")
+
+    assert "inventory_base_scan_worker" in source
+    assert "portable_inventory_worker" in source
+    assert "inventoryLoadingProgress" in source
+    assert "def inventory_base_scan_worker" in workers
+    assert "def portable_inventory_worker" in workers
+    assert "def collect_registry_inventory" in inventory
+    assert "def collect_portable_inventory" in inventory
