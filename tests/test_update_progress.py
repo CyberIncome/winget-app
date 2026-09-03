@@ -1,14 +1,18 @@
 """Regression coverage for the foreground Winget update progress surface."""
 
 from collections import deque
+from pathlib import Path
 
 from src.ui.update_progress import (
+    UpdateProgressMainWindow,
     _observe_output,
     _start_package_ui,
     apply_update_progress,
     observe_winget_update_output,
 )
-from src.ui.version_integrity_window import VersionIntegrityMainWindow
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_byte_progress_is_converted_to_real_percentage():
@@ -62,10 +66,15 @@ def test_no_applicable_upgrade_is_not_misclassified_as_resolving():
     assert observation.percent is None
 
 
-def test_progress_surface_shows_package_stage_and_real_download_percent(qtbot):
-    window = VersionIntegrityMainWindow()
+def _window(qtbot):
+    window = UpdateProgressMainWindow()
     qtbot.addWidget(window)
     apply_update_progress(window)
+    return window
+
+
+def test_progress_surface_shows_package_stage_and_real_download_percent(qtbot):
+    window = _window(qtbot)
     window.apply_winget_results(
         [
             {
@@ -113,8 +122,19 @@ def test_progress_surface_shows_package_stage_and_real_download_percent(qtbot):
     window._update_progress_timer.stop()
 
 
+def test_refresh_output_does_not_activate_update_progress_surface(qtbot):
+    window = _window(qtbot)
+    window.current_operation = "refresh"
+
+    window._handle_process_output("stdout", "Installing 73%\n")
+
+    assert window.update_progress_banner.isHidden() is True
+    assert window.update_operation_progress.minimum() == 0
+    assert window.update_operation_progress.maximum() == 0
+
+
 def test_apply_update_progress_is_idempotent(qtbot):
-    window = VersionIntegrityMainWindow()
+    window = UpdateProgressMainWindow()
     qtbot.addWidget(window)
 
     apply_update_progress(window)
@@ -123,3 +143,16 @@ def test_apply_update_progress_is_idempotent(qtbot):
 
     assert window.update_progress_banner is banner
     assert window._update_progress_polished is True
+
+
+def test_progress_layer_never_rewires_core_qprocess_signals():
+    source = (ROOT / "src" / "ui" / "update_progress.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "class UpdateProgressMainWindow(StartupOptimizedMainWindow)" in source
+    assert "process.finished.disconnect" not in source
+    assert "process.finished.connect" not in source
+    assert "window.process_finished =" not in source
+    assert "window._handle_process_output =" not in source
+    assert "window.run_next_update =" not in source
