@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication, QTableView
 from src.ui.main_window import UpdateModel
 from src.ui.selection_polish import (
     _SelectionMirrorDelegate,
+    _queue_full_selection_repaint,
     apply_selection_polish,
     clear_selection,
     select_visible,
@@ -240,3 +241,17 @@ def test_checkbox_column_is_display_only_and_has_no_mouse_filter(qtbot):
         _SelectionMirrorDelegate,
     )
     assert window._checkbox_column_filters == []
+
+
+def test_selection_repaint_is_queued_for_next_event_turn(qtbot, monkeypatch):
+    window = _window(qtbot, count=2)
+    repainted = []
+    monkeypatch.setattr(
+        "src.ui.selection_polish._repaint_table_viewport",
+        lambda table: repainted.append(table),
+    )
+
+    _queue_full_selection_repaint(window.table)
+    assert repainted == []
+    QApplication.processEvents()
+    assert repainted == [window.table]
