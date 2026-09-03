@@ -193,13 +193,21 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         QTimer.singleShot(8000, self._hide_inventory_loading)
 
     def refresh_inventory(self):
-        """Keep Detective results bound to the inventory snapshot they scanned."""
+        """Keep background enrichment bound to the inventory snapshot it scanned."""
         if "detective" in self._managed_jobs:
             self.logger.info(
                 "Inventory refresh blocked while Detective owns the current snapshot."
             )
             self.status_label.setText(
                 "Inventory refresh will be available when background Detective finishes"
+            )
+            return
+        if "inventory-portable" in self._managed_jobs:
+            self.logger.info(
+                "Inventory refresh blocked while shortcut enrichment owns the current snapshot."
+            )
+            self.status_label.setText(
+                "Inventory refresh will be available when shortcut discovery finishes"
             )
             return
         self._set_inventory_loading(
@@ -260,49 +268,105 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
         return super()._advance_startup_after_refresh()
 
     def _inventory_job_succeeded(self, payload):
-        if self._startup_stage != "parallel-base":
-            result = super()._inventory_job_succeeded(payload)
-            self._hide_inventory_loading()
-            return result
         if self._is_closing:
             return
-
         payload = payload or {}
-        self._cached_reg_data = payload.get("registry") or []
-        self.set_inventory_model(payload.get("inventory") or [])
-        timings = dict(payload.get("timings") or {})
-        if timings:
-            self.logger.info(
-                "STARTUP INVENTORY BASE PROFILE registry=%.3fs assembly=%.3fs "
-                "worker_total=%.3fs registry_items=%s inventory_items=%s",
-                float(timings.get("registry_seconds") or 0.0),
-                float(timings.get("assembly_seconds") or 0.0),
-                float(timings.get("worker_total_seconds") or 0.0),
-                timings.get("registry_items", "?"),
-                timings.get("inventory_items", "?"),
-            )
         self._startup_inventory_done = True
+        self._cached_reg_data = list(payload.get("registry") or [])
+        timings = dict(payload.get("timings") or {})
+        self.logger.info(
+            "STARTUP INVENTORY BASE PROFILE registry=%.3fs assembly=%.3fs "
+            "worker_total=%.3fs registry_items=%s inventory_items=%s",
+            float(timings.get("registry_seconds") or 0.0),
+            float(timings.get("assembly_seconds") or 0.0),
+            float(timings.get("worker_total_seconds") or 0.0),
+            timings.get("registry_items", "?"),
+            timings.get("inventory_items", "?"),
+        )
+        self.set_inventory_model(list(payload.get("inventory") or []))
+        if not self._startup_inventory_done:
+            return
         self._log_base_stage_complete("inventory")
         self._finish_startup_base_if_ready()
         QTimer.singleShot(0, self._start_portable_inventory_scan)
 
     def _inventory_job_failed(self, message):
-        if self._startup_stage != "parallel-base":
-            self._hide_inventory_loading()
-            return super()._inventory_job_failed(message)
-        self.logger.warning("Startup inventory unavailable: %s", message)
-        self._set_inventory_loading("Inventory scan failed.", False)
+        if self._is_closing:
+            return
+        self.logger.error("Startup inventory base unavailable: %s", message)
         self._startup_inventory_done = True
-        self._log_base_stage_complete("inventory-failed")
+        self._set_inventory_loading(
+            "Installed application scan was unavailable.",
+            False,
+        )
+        self._log_base_stage_complete("inventory")
         self._finish_startup_base_if_ready()
 
-    def _advance_startup_to_api(self):
-        if self._startup_stage in {"parallel-base", "ready"}:
+    def _finish_startup_base_if_ready(self):
+        if not (self._startup_refresh_done and self._startup_inventory_done):
             return
-        return super()._advance_startup_to_api()
+        if self._startup_stage != "parallel-base":
+            return
+        self._startup_stage = "ready"
+        elapsed = (
+            time.monotonic() - self._startup_started_at
+            if self._startup_started_at is not None
+            else 0.0
+        )
+        self.logger.info(
+            "STARTUP BASE READY id=%s elapsed=%.3fs",
+            self._session_id,
+            elapsed,
+        )
+        QTimer.singleShot(0, self._start_post_ready_enrichment)
+
+    def _start_post_ready_enrichment(self):
+        if self._is_closing or self._startup_stage != "ready":
+            return
+        if self._deferred_startup_detective:
+            job = self._deferred_startup_detective
+            self._deferred_startup_detective = None
+            if self._start_job(
+                "detective",
+                job["target"],
+                args=job["args"],
+                timeout=job["timeout"],
+                on_success=job["on_success"],
+                on_failure=job["on_failure"],
+            ):
+                self._startup_background_detective = True
+                self.logger.info(
+                    "STARTUP BACKGROUND ENRICHMENT id=%s job=detective",
+                    self._session_id,
+                )
+        if self._startup_app_release_deferred:
+            self._startup_app_release_deferred = False
+            self.check_app_release()
+
+    def _detective_job_succeeded(self, payload):
+        result = super()._detective_job_succeeded(payload)
+        if self._startup_background_detective:
+            self._startup_background_detective = False
+            self.logger.info(
+                "STARTUP BACKGROUND ENRICHMENT COMPLETE id=%s job=detective",
+                self._session_id,
+            )
+        return result
+
+    def _detective_job_failed(self, message):
+        result = super()._detective_job_failed(message)
+        if self._startup_background_detective:
+            self._startup_background_detective = False
+            self.logger.warning(
+                "STARTUP BACKGROUND ENRICHMENT FAILED id=%s job=detective error=%s",
+                self._session_id,
+                message,
+            )
+        return result
 
     def check_app_release(self):
-        """Keep the dashboard's own network update check off the base startup path."""
+        if self._is_closing:
+            return
         if self._startup_stage == "parallel-base":
             self._startup_app_release_deferred = True
             self.logger.info(
@@ -312,69 +376,15 @@ class StartupOptimizedMainWindow(VersionIntegrityMainWindow):
             return
         return super().check_app_release()
 
-    def _log_base_stage_complete(self, stage: str) -> None:
-        started = self._startup_started_at
-        elapsed = time.monotonic() - started if started is not None else 0.0
+    def _log_base_stage_complete(self, stage):
+        elapsed = (
+            time.monotonic() - self._startup_started_at
+            if self._startup_started_at is not None
+            else 0.0
+        )
         self.logger.info(
             "STARTUP BASE STAGE COMPLETE id=%s stage=%s elapsed=%.3fs",
             self._session_id,
             stage,
             elapsed,
         )
-
-    def _finish_startup_base_if_ready(self) -> None:
-        if self._is_closing or self._startup_stage != "parallel-base":
-            return
-        if not (self._startup_refresh_done and self._startup_inventory_done):
-            return
-
-        self._startup_stage = "ready"
-        started = self._startup_started_at
-        elapsed = time.monotonic() - started if started is not None else 0.0
-        self.logger.info(
-            "STARTUP BASE READY id=%s elapsed=%.3fs",
-            self._session_id,
-            elapsed,
-        )
-        QTimer.singleShot(0, self._start_post_ready_enrichment)
-
-    def _start_post_ready_enrichment(self) -> None:
-        if self._is_closing or self._startup_stage != "ready":
-            return
-
-        deferred = self._deferred_startup_detective
-        self._deferred_startup_detective = None
-        if deferred is not None:
-            started = super()._start_job(
-                "detective",
-                deferred["target"],
-                args=deferred["args"],
-                timeout=deferred["timeout"],
-                on_success=deferred["on_success"],
-                on_failure=deferred["on_failure"],
-            )
-            self._startup_background_detective = bool(started)
-            if started:
-                self.logger.info(
-                    "STARTUP BACKGROUND ENRICHMENT id=%s job=detective",
-                    self._session_id,
-                )
-
-        QTimer.singleShot(0, self.update_github_api_status)
-        if self._startup_app_release_deferred:
-            self._startup_app_release_deferred = False
-            QTimer.singleShot(0, self.check_app_release)
-
-    def _handle_job_finished(self, name):
-        if name == "detective" and self._startup_background_detective:
-            job = self._managed_jobs.pop(name, None)
-            if job is not None:
-                job.deleteLater()
-            self._startup_background_detective = False
-            if not self._is_closing:
-                self.logger.info(
-                    "STARTUP BACKGROUND ENRICHMENT COMPLETE id=%s job=detective",
-                    self._session_id,
-                )
-            return
-        return super()._handle_job_finished(name)
