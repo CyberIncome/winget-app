@@ -63,18 +63,16 @@ def _byte_percent(text: str) -> tuple[Optional[int], Optional[str]]:
     return percent, detail
 
 
-def observe_winget_update_output(raw: str) -> Optional[UpdateProgressObservation]:
-    """Extract the latest truthful update stage/progress from one output chunk."""
-    text = _clean_output(raw)
-    lowered = text.lower()
+def _observe_line(line: str) -> Optional[UpdateProgressObservation]:
+    lowered = line.lower()
 
-    percent, byte_detail = _byte_percent(text)
+    percent, byte_detail = _byte_percent(line)
     if percent is not None:
         return UpdateProgressObservation(
             "Downloading", byte_detail or "Downloading", percent
         )
 
-    percent_matches = list(_PERCENT_RE.finditer(text))
+    percent_matches = list(_PERCENT_RE.finditer(line))
     if percent_matches:
         value = int(percent_matches[-1].group(1))
         stage = "Installing" if "install" in lowered else "Downloading"
@@ -117,6 +115,17 @@ def observe_winget_update_output(raw: str) -> Optional[UpdateProgressObservation
             "Resolving", "Resolving package and target version"
         )
     return None
+
+
+def observe_winget_update_output(raw: str) -> Optional[UpdateProgressObservation]:
+    """Extract the latest truthful update stage/progress from one output chunk."""
+    text = _clean_output(raw)
+    latest = None
+    for line in text.splitlines():
+        observation = _observe_line(line.strip())
+        if observation is not None:
+            latest = observation
+    return latest
 
 
 def _format_elapsed(seconds: float) -> str:
