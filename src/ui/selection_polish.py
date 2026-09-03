@@ -1,12 +1,22 @@
-"""Final checkbox/row-selection interaction normalization for the product UI.
+"""Normalize table selection into one familiar Windows-style selection model.
 
-Rows are for inspection; checkboxes are the explicit package-action selection.
-The two states intentionally do not mirror each other.
+Rows and checkboxes represent the same action set. A plain click selects one
+row, Ctrl-click toggles individual rows, and Shift-click selects a contiguous
+range. The first column remains a large checkbox hit target, but it follows the
+same row-selection semantics as clicking anywhere else on the row.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QTimer, Qt
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelection,
+    QItemSelectionModel,
+    QModelIndex,
+    QObject,
+    QTimer,
+    Qt,
+)
 from PySide6.QtWidgets import QPushButton, QTableView
 
 
@@ -14,7 +24,7 @@ _CHECKBOX_COLUMN_WIDTH = 52
 
 
 class _CheckboxColumnFilter(QObject):
-    """Make the full first-column cell a reliable checkbox hit target."""
+    """Treat the full first-column cell as a row-selection target."""
 
     def __init__(self, window, table, proxy):
         super().__init__(table.viewport())
@@ -41,6 +51,64 @@ class _CheckboxColumnFilter(QObject):
             self._detach_table()
             return None
 
+    def _apply_selection(self, index, modifiers):
+        table = self._table
+        if table is None:
+            return
+        selection_model = table.selectionModel()
+        model = table.model()
+        if selection_model is None or model is None:
+            return
+
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        control = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        row_flag = QItemSelectionModel.SelectionFlag.Rows
+
+        if shift:
+            anchor = selection_model.currentIndex()
+            anchor_row = anchor.row() if anchor.isValid() else index.row()
+            first = min(anchor_row, index.row())
+            last = max(anchor_row, index.row())
+            last_column = max(0, model.columnCount() - 1)
+            selection = QItemSelection(
+                model.index(first, 0),
+                model.index(last, last_column),
+            )
+            command = (
+                QItemSelectionModel.SelectionFlag.Select
+                if control
+                else QItemSelectionModel.SelectionFlag.ClearAndSelect
+            )
+            selection_model.select(selection, command | row_flag)
+            selection_model.setCurrentIndex(
+                index,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            return
+
+        if control:
+            selected = selection_model.isRowSelected(index.row(), QModelIndex())
+            command = (
+                QItemSelectionModel.SelectionFlag.Deselect
+                if selected
+                else QItemSelectionModel.SelectionFlag.Select
+            )
+            selection_model.select(index, command | row_flag)
+            selection_model.setCurrentIndex(
+                index,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            return
+
+        selection_model.select(
+            index,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect | row_flag,
+        )
+        selection_model.setCurrentIndex(
+            index,
+            QItemSelectionModel.SelectionFlag.NoUpdate,
+        )
+
     def eventFilter(self, watched, event):
         event_type = event.type()
         if event_type not in {
@@ -53,9 +121,7 @@ class _CheckboxColumnFilter(QObject):
             return False
 
         table = self._table
-        proxy = self._proxy
-        window = self._window
-        if table is None or proxy is None:
+        if table is None:
             return False
         try:
             if watched is not table.viewport():
@@ -68,62 +134,15 @@ class _CheckboxColumnFilter(QObject):
         if index is None or not index.isValid() or index.column() != 0:
             return False
 
-        # A native double-click sequence should still represent one checkbox
-        # action, not toggle-on/toggle-off in rapid succession.
+        # Consume release/double-click so the delegate cannot independently
+        # toggle the checkbox after we have applied the row selection once.
         if event_type in {
             QEvent.Type.MouseButtonRelease,
             QEvent.Type.MouseButtonDblClick,
         }:
             return True
 
-        try:
-            model = proxy.sourceModel()
-        except RuntimeError:
-            self._detach_table()
-            return False
-        if model is None:
-            return True
-        source_index = proxy.mapToSource(index)
-        row = source_index.row()
-        if not 0 <= row < len(getattr(model, "_data", [])):
-            return True
-
-        checked = (
-            model.data(model.index(row, 0), Qt.ItemDataRole.CheckStateRole)
-            == Qt.CheckState.Checked
-        )
-        if hasattr(model, "set_checked"):
-            model.set_checked(row, not checked, emit_signal=False)
-        else:
-            model.setData(
-                model.index(row, 0),
-                Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked,
-                Qt.ItemDataRole.CheckStateRole,
-            )
-
-        # Checkbox action changes the action set, but also moves the single
-        # inspection highlight/details to the row the user just interacted with.
-        # It never changes any other row's checkbox state.
-        selection_model = table.selectionModel()
-        if selection_model is not None:
-            selection_model.setCurrentIndex(
-                index,
-                QItemSelectionModel.SelectionFlag.ClearAndSelect
-                | QItemSelectionModel.SelectionFlag.Rows,
-            )
-
-        if window is not None:
-            pane = (
-                getattr(window, "update_details", None)
-                if table is getattr(window, "table", None)
-                else getattr(window, "inventory_details", None)
-            )
-            if pane is not None:
-                _refresh_detail_from_selection(window, table, proxy, pane)
-            refresh = getattr(window, "_refresh_update_filter_summary", None)
-            if table is getattr(window, "table", None) and callable(refresh):
-                refresh()
-            _refresh_checked_action_state(window)
+        self._apply_selection(index, event.modifiers())
         return True
 
 
@@ -136,9 +155,11 @@ def _refresh_detail_from_selection(window, table, proxy, pane) -> None:
         return
 
 
-def _enforce_checkbox_column_width(table) -> None:
-    """Restore the full-cell checkbox hit target after model replacement."""
+def _enforce_table_interaction(table) -> None:
+    """Restore Windows-style multi-selection and the large checkbox target."""
     try:
+        table.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
+        table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         header = table.horizontalHeader()
         header.setMinimumSectionSize(_CHECKBOX_COLUMN_WIDTH)
         if table.model() is not None and table.model().columnCount() > 0:
@@ -147,43 +168,87 @@ def _enforce_checkbox_column_width(table) -> None:
         return
 
 
-def _enforce_table_interaction(table) -> None:
-    """Restore the inspection/checklist contract after model replacement."""
-    try:
-        table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
-        table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
-    except RuntimeError:
-        return
-    _enforce_checkbox_column_width(table)
-
-
 def _schedule_table_interaction(table) -> None:
+    # Source-model loaders resize the checkbox column after sourceModelChanged.
+    # Re-apply on the next event-loop turn so the final geometry is ours.
     QTimer.singleShot(0, lambda: _enforce_table_interaction(table))
 
 
-def _decouple_row_selection(window, table, proxy, pane) -> None:
-    """Make row highlighting a single inspection cursor, not an action set."""
-    _enforce_table_interaction(table)
+def _selection_key(window, model, item):
+    helper = getattr(window, "_selection_key", None)
+    if callable(helper):
+        return helper(model, item)
+    return item.get("Id") or item.get("Name")
 
+
+def _checked_source_items(window, proxy) -> list[dict]:
+    model = proxy.sourceModel() if proxy is not None else None
+    if model is None:
+        return []
+    selected = getattr(model, "_selected", {})
+    return [
+        item
+        for item in getattr(model, "_data", [])
+        if bool(selected.get(_selection_key(window, model, item), False))
+    ]
+
+
+def _checked_count_for_current_page(window) -> int:
+    proxy = window.inventory_proxy if window.sidebar.currentRow() == 1 else window.proxy_model
+    return len(_checked_source_items(window, proxy))
+
+
+def _refresh_selected_action_state(window) -> None:
+    button = getattr(window, "update_selected_btn", None)
+    if button is None:
+        return
+    count = _checked_count_for_current_page(window)
+    button.setText("Update Selected" if count == 0 else f"Update Selected ({count})")
+
+
+def _sync_selection_to_checkboxes(window, table, proxy, pane) -> None:
+    """Mirror the table's selected rows into checkbox state exactly."""
+    model = proxy.sourceModel() if proxy is not None else None
+    selection_model = table.selectionModel()
+    if model is None or selection_model is None or getattr(model, "_syncing", False):
+        return
+
+    selected_rows = {
+        proxy.mapToSource(index).row()
+        for index in selection_model.selectedRows()
+        if index.isValid()
+    }
+    try:
+        model._syncing = True
+        for row in range(len(getattr(model, "_data", []))):
+            model.set_checked(row, row in selected_rows, emit_signal=False)
+    finally:
+        model._syncing = False
+
+    _refresh_detail_from_selection(window, table, proxy, pane)
+    refresh = getattr(window, "_refresh_update_filter_summary", None)
+    if table is getattr(window, "table", None) and callable(refresh):
+        refresh()
+    _refresh_selected_action_state(window)
+
+
+def _wire_table_selection(window, table, proxy, pane) -> None:
+    _enforce_table_interaction(table)
     selection_model = table.selectionModel()
     if selection_model is not None:
         try:
-            # Remove the historical bidirectional checkbox mirror.
             selection_model.selectionChanged.disconnect()
         except (RuntimeError, TypeError):
             pass
         selection_model.selectionChanged.connect(
-            lambda _selected, _deselected: _refresh_detail_from_selection(
+            lambda _selected, _deselected: _sync_selection_to_checkboxes(
                 window, table, proxy, pane
             )
         )
 
-    # Production model loaders replace the proxy source model and then restore
-    # legacy ExtendedSelection/40px sizing. Re-apply this interaction contract
-    # after that same event-loop turn so refreshes cannot undo the final policy.
     proxy.sourceModelChanged.connect(lambda: _schedule_table_interaction(table))
     proxy.sourceModelChanged.connect(
-        lambda: QTimer.singleShot(0, lambda: _refresh_checked_action_state(window))
+        lambda: QTimer.singleShot(0, lambda: _refresh_selected_action_state(window))
     )
 
     event_filter = _CheckboxColumnFilter(window, table, proxy)
@@ -191,66 +256,38 @@ def _decouple_row_selection(window, table, proxy, pane) -> None:
     window._checkbox_column_filters.append(event_filter)
 
 
-def _independent_native_checkbox(window, table, proxy, source_row, checked) -> None:
-    """Handle keyboard/native checkbox toggles without touching row selection."""
-    if table is getattr(window, "table", None):
-        refresh = getattr(window, "_refresh_update_filter_summary", None)
-        if callable(refresh):
-            refresh()
-    _refresh_checked_action_state(window)
-
-
-def _checked_source_items(window, table, proxy) -> list[dict]:
-    model = proxy.sourceModel() if proxy is not None else None
-    if model is None:
-        return []
-    return [
-        item
-        for item in getattr(model, "_data", [])
-        if bool(
-            getattr(model, "_selected", {}).get(
-                window._selection_key(model, item),
-                False,
-            )
-        )
-    ]
-
-
-def _checked_count_for_current_page(window) -> int:
-    if window.sidebar.currentRow() == 1:
-        return len(
-            _checked_source_items(
-                window,
-                window.inventory_table,
-                window.inventory_proxy,
-            )
-        )
-    return len(
-        _checked_source_items(
-            window,
-            window.table,
-            window.proxy_model,
-        )
+def _native_checkbox_to_selection(window, table, proxy, source_row, checked) -> None:
+    """Make keyboard/native checkbox toggles update the same row selection."""
+    model = proxy.sourceModel()
+    selection_model = table.selectionModel()
+    if model is None or selection_model is None or getattr(model, "_syncing", False):
+        return
+    proxy_index = proxy.mapFromSource(model.index(source_row, 0))
+    if not proxy_index.isValid():
+        return
+    command = (
+        QItemSelectionModel.SelectionFlag.Select
+        if checked
+        else QItemSelectionModel.SelectionFlag.Deselect
+    )
+    selection_model.select(
+        proxy_index,
+        command | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    selection_model.setCurrentIndex(
+        proxy_index,
+        QItemSelectionModel.SelectionFlag.NoUpdate,
     )
 
 
-def _refresh_checked_action_state(window) -> None:
-    button = getattr(window, "update_selected_btn", None)
-    if button is None:
-        return
-    count = _checked_count_for_current_page(window)
-    button.setText("Update Checked" if count == 0 else f"Update Checked ({count})")
-
-
-def update_checked(window) -> None:
-    """Update only explicit checkbox selections; highlights are inspection-only."""
+def update_selected(window) -> None:
+    """Update exactly the rows represented by the synchronized selection/checks."""
     on_updates = window.sidebar.currentRow() == 0
     proxy = window.proxy_model if on_updates else window.inventory_proxy
-    table = window.table if on_updates else window.inventory_table
-    selected_items = _checked_source_items(window, table, proxy)
+    selected_items = _checked_source_items(window, proxy)
     if not selected_items:
-        window.status_label.setText("Check one or more packages to update")
-        window.logger.info("Update Checked clicked with no checked packages.")
+        window.status_label.setText("Select one or more packages to update")
+        window.logger.info("Update Selected clicked with no selected packages.")
         return
 
     if on_updates:
@@ -271,14 +308,14 @@ def update_checked(window) -> None:
 
     if refs:
         window.logger.info(
-            "User requested update for %d explicitly checked Winget-proven app(s).",
+            "User requested update for %d selected Winget-proven app(s).",
             len(refs),
         )
         window.batch_update(refs)
         return
 
     message = (
-        "Checked app(s) are not present in the current authoritative Winget "
+        "Selected app(s) are not present in the current authoritative Winget "
         "upgrade scan; no update command was run."
     )
     window.status_label.setText(message)
@@ -286,50 +323,40 @@ def update_checked(window) -> None:
     window.append_log(f"\n[!] {message}")
 
 
-def set_visible_checked(window, checked: bool) -> int:
-    """Set checkbox state for every currently visible Updates row."""
+def select_visible(window) -> int:
+    """Select every currently visible Updates row and mirror the checkboxes."""
     proxy = window.proxy_model
-    model = proxy.sourceModel()
-    if model is None:
+    selection_model = window.table.selectionModel()
+    if selection_model is None or proxy.rowCount() == 0:
         return 0
-
-    changed = 0
-    for proxy_row in range(proxy.rowCount()):
-        source_index = proxy.mapToSource(proxy.index(proxy_row, 0))
-        row = source_index.row()
-        if hasattr(model, "set_checked") and model.set_checked(
-            row, checked, emit_signal=False
-        ):
-            changed += 1
-
-    refresh = getattr(window, "_refresh_update_filter_summary", None)
-    if callable(refresh):
-        refresh()
-    _refresh_checked_action_state(window)
-    return changed
+    last_column = max(0, proxy.columnCount() - 1)
+    selection = QItemSelection(
+        proxy.index(0, 0),
+        proxy.index(proxy.rowCount() - 1, last_column),
+    )
+    selection_model.select(
+        selection,
+        QItemSelectionModel.SelectionFlag.ClearAndSelect
+        | QItemSelectionModel.SelectionFlag.Rows,
+    )
+    return proxy.rowCount()
 
 
-def clear_all_checked(window) -> int:
-    """Clear all Updates checkboxes without disturbing inspection highlight."""
+def clear_selection(window) -> int:
+    """Clear the Updates row selection and therefore all mirrored checks."""
     model = window.proxy_model.sourceModel()
-    if model is None:
-        return 0
-
-    changed = 0
-    for row in range(len(getattr(model, "_data", []))):
-        if hasattr(model, "set_checked") and model.set_checked(
-            row, False, emit_signal=False
-        ):
-            changed += 1
-
-    refresh = getattr(window, "_refresh_update_filter_summary", None)
-    if callable(refresh):
-        refresh()
-    _refresh_checked_action_state(window)
-    return changed
+    before = len(_checked_source_items(window, window.proxy_model))
+    selection_model = window.table.selectionModel()
+    if selection_model is not None:
+        selection_model.clearSelection()
+    elif model is not None:
+        for row in range(len(getattr(model, "_data", []))):
+            model.set_checked(row, False, emit_signal=False)
+    _refresh_selected_action_state(window)
+    return before
 
 
-def _rewire_bulk_checkbox_controls(window) -> None:
+def _rewire_bulk_controls(window) -> None:
     select_button = None
     clear_button = None
     for button in window.update_tab.findChildren(QPushButton):
@@ -343,11 +370,9 @@ def _rewire_bulk_checkbox_controls(window) -> None:
             select_button.clicked.disconnect()
         except (RuntimeError, TypeError):
             pass
-        select_button.setText("Check Visible")
-        select_button.setToolTip(
-            "Check every update row currently visible through the search filter"
-        )
-        select_button.clicked.connect(lambda: set_visible_checked(window, True))
+        select_button.setText("Select Visible")
+        select_button.setToolTip("Select every update row currently visible through the filter")
+        select_button.clicked.connect(lambda: select_visible(window))
         window.check_visible_btn = select_button
 
     if clear_button is not None:
@@ -355,52 +380,46 @@ def _rewire_bulk_checkbox_controls(window) -> None:
             clear_button.clicked.disconnect()
         except (RuntimeError, TypeError):
             pass
-        clear_button.setText("Clear Checked")
-        clear_button.setToolTip("Clear all checked update rows")
-        clear_button.clicked.connect(lambda: clear_all_checked(window))
+        clear_button.setText("Clear Selection")
+        clear_button.setToolTip("Clear all selected update rows")
+        clear_button.clicked.connect(lambda: clear_selection(window))
         window.clear_checked_btn = clear_button
 
     try:
         window.update_selected_btn.clicked.disconnect()
     except (RuntimeError, TypeError):
         pass
-    window.update_selected_btn.setToolTip(
-        "Update only explicitly checked packages; row highlight is inspection-only"
-    )
+    window.update_selected_btn.setText("Update Selected")
+    window.update_selected_btn.setToolTip("Update the selected/checked package rows")
     window.update_selected_btn.clicked.connect(window.update_selected)
 
 
 def apply_selection_polish(window) -> None:
-    """Install independent checklist + single-row inspection behavior."""
+    """Install unified row/checkbox selection after all UI layers exist."""
     if getattr(window, "_selection_polished", False):
         return
     window._selection_polished = True
     window._checkbox_column_filters = []
 
-    # Existing model signals call self.handle_native_checkbox dynamically. Point
-    # that callback at the independent policy so keyboard toggles cannot revive
-    # the legacy checkbox<->row-selection mirroring behavior.
     window.handle_native_checkbox = lambda table, proxy, row, checked: (
-        _independent_native_checkbox(window, table, proxy, row, checked)
+        _native_checkbox_to_selection(window, table, proxy, row, checked)
     )
-    # Preserve the historical public method name for callers/shortcuts, but make
-    # its canonical instance behavior checklist-only as well.
-    window.update_selected = lambda: update_checked(window)
+    window.update_selected = lambda: update_selected(window)
 
-    _decouple_row_selection(
+    _wire_table_selection(
         window,
         window.table,
         window.proxy_model,
         window.update_details,
     )
-    _decouple_row_selection(
+    _wire_table_selection(
         window,
         window.inventory_table,
         window.inventory_proxy,
         window.inventory_details,
     )
-    _rewire_bulk_checkbox_controls(window)
+    _rewire_bulk_controls(window)
     window.sidebar.currentRowChanged.connect(
-        lambda _index: _refresh_checked_action_state(window)
+        lambda _index: _refresh_selected_action_state(window)
     )
-    _refresh_checked_action_state(window)
+    _refresh_selected_action_state(window)
