@@ -55,6 +55,15 @@ def _install_crash_hooks(log_file):
                 _FAULT_LOG_STREAM = open(
                     crash_log, "a", encoding="utf-8"
                 )
+                # Keep old crash evidence, but delimit every new process so a
+                # future fatal dump can be tied to the exact session/pid that
+                # produced it instead of being confused with historical stacks.
+                _FAULT_LOG_STREAM.write(
+                    "\n=== SESSION START "
+                    f"id={_SESSION_ID} pid={os.getpid()} "
+                    f"at={time.strftime('%Y-%m-%d %H:%M:%S')} ===\n"
+                )
+                _FAULT_LOG_STREAM.flush()
                 faulthandler.enable(_FAULT_LOG_STREAM, all_threads=True)
                 break
             except OSError:
