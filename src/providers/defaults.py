@@ -7,6 +7,7 @@ providers registered here are additive and cannot replace Winget authority.
 from __future__ import annotations
 
 from src.providers.chocolatey import ChocolateyProvider
+from src.providers.npm import NpmGlobalProvider
 from src.providers.pipx import PipxProvider
 from src.providers.registry import ProviderRegistry
 from src.providers.steam import SteamProvider
@@ -19,5 +20,6 @@ def build_default_provider_registry() -> ProviderRegistry:
             SteamProvider(),
             ChocolateyProvider(),
             PipxProvider(),
+            NpmGlobalProvider(),
         ]
     )
