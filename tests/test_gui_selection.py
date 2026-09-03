@@ -55,11 +55,14 @@ def _click(qtbot, window, row, column=1, modifier=Qt.KeyboardModifier.NoModifier
     QApplication.processEvents()
     rect = window.table.visualRect(index)
     assert rect.isValid()
+    # PySide6's QTest.mouseClick overload does not consistently expose the
+    # keyboard-modifier argument as a keyword. Pass it positionally so these
+    # native mouse-event regressions work across supported PySide6 builds.
     qtbot.mouseClick(
         window.table.viewport(),
         Qt.MouseButton.LeftButton,
-        modifier=modifier,
-        pos=rect.center(),
+        modifier,
+        rect.center(),
     )
     QApplication.processEvents()
 
