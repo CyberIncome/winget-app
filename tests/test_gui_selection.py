@@ -11,6 +11,7 @@ from src.ui.selection_polish import (
     apply_selection_polish,
     clear_all_checked,
     set_visible_checked,
+    update_checked,
 )
 from src.ui.version_integrity_window import VersionIntegrityMainWindow
 
@@ -47,16 +48,61 @@ def _checked(model, row):
     )
 
 
-def test_row_selection_no_longer_erases_checked_rows(qtbot):
+def test_row_highlight_is_single_selection_and_does_not_change_checkboxes(qtbot):
     window = _window(qtbot)
     model = window.proxy_model.sourceModel()
     assert model is not None
+    assert window.table.selectionMode() == QTableView.SelectionMode.SingleSelection
 
     assert model.set_checked(0, True) is True
     window.table.selectRow(1)
 
     assert _checked(model, 0) is True
     assert _checked(model, 1) is False
+    assert [index.row() for index in window.table.selectionModel().selectedRows()] == [1]
+
+
+def test_keyboard_native_checkbox_toggle_does_not_move_inspection_highlight(qtbot):
+    window = _window(qtbot)
+    model = window.proxy_model.sourceModel()
+    assert model is not None
+
+    window.table.selectRow(1)
+    model.set_checked(0, True, emit_signal=True)
+
+    assert _checked(model, 0) is True
+    assert [index.row() for index in window.table.selectionModel().selectedRows()] == [1]
+
+
+def test_highlight_only_is_never_an_update_target(qtbot, monkeypatch):
+    window = _window(qtbot)
+    captured = []
+    monkeypatch.setattr(window, "batch_update", lambda refs: captured.extend(refs))
+
+    window.table.selectRow(0)
+    update_checked(window)
+
+    assert captured == []
+    assert "Check one or more" in window.status_label.text()
+
+
+def test_checked_row_is_the_only_update_target(qtbot, monkeypatch):
+    window = _window(qtbot)
+    model = window.proxy_model.sourceModel()
+    captured = []
+    monkeypatch.setattr(window, "batch_update", lambda refs: captured.extend(refs))
+
+    # Inspect Beta while explicitly checking Alpha. The action must follow the
+    # checkbox, not the highlighted row.
+    window.table.selectRow(1)
+    model.set_checked(0, True)
+    update_checked(window)
+
+    assert len(captured) == 1
+    assert captured[0]["value"] == "Example.Alpha"
+    assert captured[0]["match_by"] == "id"
+    assert captured[0]["source"] == "winget"
+    assert captured[0]["version"] == "2.0"
 
 
 def test_visible_bulk_check_respects_filter_and_clear_is_independent(qtbot):
@@ -78,9 +124,6 @@ def test_visible_bulk_check_respects_filter_and_clear_is_independent(qtbot):
 def test_selection_polish_restores_full_width_after_model_reload(qtbot):
     window = _window(qtbot)
 
-    # Production model loaders replace each proxy source model and historically
-    # resize the checkbox column back to 40 px afterward. Simulate that exact
-    # ordering and confirm the queued selection-polish correction wins.
     update_model = UpdateModel(
         [{"Name": "Gamma", "Id": "Example.Gamma"}],
     )
@@ -98,11 +141,10 @@ def test_selection_polish_restores_full_width_after_model_reload(qtbot):
     assert window.inventory_table.columnWidth(0) >= 52
     assert window.check_visible_btn.text() == "Check Visible"
     assert window.clear_checked_btn.text() == "Clear Checked"
+    assert window.update_selected_btn.text() == "Update Checked"
 
 
 def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
-    # This table is deliberately *not* registered with qtbot: the test owns its
-    # destruction, so pytest-qt will not later try to close a deleted wrapper.
     table = QTableView()
     proxy = CustomSortProxy()
     table.setModel(proxy)
@@ -114,8 +156,6 @@ def test_checkbox_filter_is_safe_during_qt_object_teardown(qapp):
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     QApplication.processEvents()
 
-    # The destroyed signal must sever references before any late event can
-    # dereference a deleted QTableView C++ object.
     assert event_filter._table is None
     assert event_filter._proxy is None
     assert event_filter._window is None
